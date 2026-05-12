@@ -16,52 +16,202 @@ from . import angle_calc
 from .utils import get_best_rula_score
 from .config import RULA_CONFIG
 
-# ── Occlusion detection constants (MediaPipe world-coordinate space) ──────────
+# ── Anomaly detection constants (MediaPipe world-coordinate space) ──────────
 # 預設值，未來透過實驗校正
-_OCC_VIS_TH       = 0.50   # visibility 低於此值 → 直接不可靠
-_OCC_VIS_MID_TH   = 0.80   # visibility 中間帶
-_OCC_SPEED_TH_LOW  = 3.0   # 正規化速度門檻（中）：中等 visibility 時觸發
-_OCC_SPEED_TH_HIGH = 10.0  # 正規化速度門檻（極端）：任何 visibility 都觸發
+_ANOM_VIS_TH       = 0.50   # visibility 低於此值 → 直接不可靠
+_ANOM_VIS_MID_TH   = 0.80   # visibility 中間帶
+_ANOM_SPEED_TH_LOW  = 3.0   # 正規化速度門檻（中）：中等 visibility 時觸發
+_ANOM_SPEED_TH_HIGH = 10.0  # 正規化速度門檻（極端）：任何 visibility 都觸發
+
+# MediaPipe 33 點關節群組（用於建立各群組速度分布）
+_JOINT_GROUPS: dict[str, list[int]] = {
+    'trunk': [11, 12, 23, 24],          # 左右肩、左右髖
+    'head':  [0, 7, 8],                 # 鼻子、左右耳
+    'arm':   [13, 14],                  # 左右肘
+    'hand':  [15, 16, 17, 18, 19, 20],  # 左右腕、手指點
+    'leg':   [25, 26, 27, 28],          # 左右膝、左右踝
+}
+
+# 每個關節屬於哪個群組（反查表）
+_JOINT_TO_GROUP: dict[int, str] = {
+    jidx: grp
+    for grp, idxs in _JOINT_GROUPS.items()
+    for jidx in idxs
+}
 
 
-def _compute_occlusion_mask(landmarks_arr, prev_reliable, body_scale, dt):
+def _compute_anomaly_mask(landmarks_arr, prev_reliable, body_scale, dt,
+                          group_thresholds: dict | None = None):
     """
-    判斷 MediaPipe 33 個關節點是否可靠（非遮擋）。
+    判斷 MediaPipe 33 個關節點是否可靠（非異常）。
 
     Args:
-        landmarks_arr:  33 × [x, y, z, vis]，MediaPipe world coordinates
-        prev_reliable:  list[list|None]，每個關節上一個可靠幀的 [x, y, z]
-        body_scale:     人體尺度參考（肩寬），用來正規化速度
-        dt:             兩個分析幀之間的實際時間差（秒）
+        landmarks_arr:    33 × [x, y, z, vis]，MediaPipe world coordinates
+        prev_reliable:    list[list|None]，每個關節上一個可靠幀的 [x, y, z]
+        body_scale:       人體尺度參考（肩寬），用來正規化速度
+        dt:               兩個分析幀之間的實際時間差（秒）
+        group_thresholds: {group_name: (th_low, th_high)}，由 Pass 1 計算；None 時退回固定值
 
     Returns:
-        mask (list[bool]):         True = 可靠，False = 疑似遮擋
+        mask (list[bool]):         True = 可靠，False = 疑似異常
         new_prev (list[list|None]): 更新後的 prev_reliable（只更新可靠的關節）
     """
     mask = []
     new_prev = list(prev_reliable)
+    detail: list = []   # None if reliable, else {'reason', 'visibility', 'speed_ratio'}
 
     for i, lm in enumerate(landmarks_arr):
         x, y, z, vis = float(lm[0]), float(lm[1]), float(lm[2]), float(lm[3])
+        grp = _JOINT_TO_GROUP.get(i, 'trunk')
+        if group_thresholds:
+            th_low, th_high = group_thresholds.get(grp, (_ANOM_SPEED_TH_LOW, _ANOM_SPEED_TH_HIGH))
+        else:
+            th_low, th_high = _ANOM_SPEED_TH_LOW, _ANOM_SPEED_TH_HIGH
         reliable = True
+        reason: str | None = None
+        speed_ratio: float | None = None
 
-        if vis < _OCC_VIS_TH:
+        if vis < _ANOM_VIS_TH:
             reliable = False
+            reason = 'low_visibility'
         else:
             prev = prev_reliable[i]
             if prev is not None and dt > 1e-9 and body_scale > 1e-6:
                 jump = ((x - prev[0])**2 + (y - prev[1])**2 + (z - prev[2])**2) ** 0.5
                 speed_ratio = (jump / dt) / body_scale
-                if speed_ratio > _OCC_SPEED_TH_HIGH:
+                if speed_ratio > th_high:
                     reliable = False
-                elif vis < _OCC_VIS_MID_TH and speed_ratio > _OCC_SPEED_TH_LOW:
+                    reason = 'speed_jump'
+                elif vis < _ANOM_VIS_MID_TH and speed_ratio > th_low:
                     reliable = False
+                    reason = 'low_vis_speed_jump'
 
         mask.append(reliable)
         if reliable:
             new_prev[i] = [x, y, z]
+            detail.append(None)
+        else:
+            detail.append({
+                'reason':      reason,
+                'visibility':  round(vis, 4),
+                'speed_ratio': round(speed_ratio, 4) if speed_ratio is not None else None,
+            })
 
-    return mask, new_prev
+    return mask, new_prev, detail
+
+
+def _run_pass1(
+    video_path: str,
+    detector,
+    frame_interval: int,
+    fps: float,
+    vis_high: float = 0.80,
+) -> tuple[float, dict[str, tuple[float, float]]]:
+    """
+    Pass 1：預掃描影片，計算 body_scale_ref 與各關節群組自適應速度門檻。
+
+    Returns:
+        body_scale_ref  : 穩定肩寬中位數（> 0 才有效）
+        group_thresholds: {group_name: (th_low, th_high)}
+    """
+    import statistics
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return 0.0, {}
+
+    shoulder_widths: list[float] = []
+    group_speeds: dict[str, list[float]] = {g: [] for g in _JOINT_GROUPS}
+
+    prev_reliable: list = [None] * 33
+    prev_frame_idx = -1
+    frame_idx = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_idx % frame_interval == 0:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            detected = detector.process_frame(rgb)
+            if detected:
+                arr = detector.get_landmarks_array()
+                if arr and len(arr) == 33:
+                    # 收集肩寬樣本
+                    L_SHO, R_SHO = arr[11], arr[12]
+                    if float(L_SHO[3]) >= vis_high and float(R_SHO[3]) >= vis_high:
+                        sw = (
+                            (L_SHO[0] - R_SHO[0]) ** 2 +
+                            (L_SHO[1] - R_SHO[1]) ** 2 +
+                            (L_SHO[2] - R_SHO[2]) ** 2
+                        ) ** 0.5
+                        if sw > 1e-6:
+                            shoulder_widths.append(sw)
+
+                    # 收集各群組速度樣本（只用高 visibility 點）
+                    if prev_frame_idx >= 0:
+                        dt = (frame_idx - prev_frame_idx) / fps
+                        for i, lm in enumerate(arr):
+                            grp = _JOINT_TO_GROUP.get(i)
+                            if grp is None:
+                                continue
+                            if float(lm[3]) < vis_high:
+                                continue
+                            prev = prev_reliable[i]
+                            if prev is None:
+                                continue
+                            jump = (
+                                (lm[0] - prev[0]) ** 2 +
+                                (lm[1] - prev[1]) ** 2 +
+                                (lm[2] - prev[2]) ** 2
+                            ) ** 0.5
+                            tmp_scale = shoulder_widths[-1] if shoulder_widths else 0.1
+                            speed_ratio = (jump / dt) / tmp_scale if dt > 1e-9 else 0.0
+                            group_speeds[grp].append(speed_ratio)
+
+                    # 更新 prev_reliable（Pass 1 全用高 visibility 的點）
+                    for i, lm in enumerate(arr):
+                        if float(lm[3]) >= vis_high:
+                            prev_reliable[i] = [lm[0], lm[1], lm[2]]
+                    prev_frame_idx = frame_idx
+
+        frame_idx += 1
+
+    cap.release()
+
+    # 計算 body_scale_ref（中位數）
+    body_scale_ref = statistics.median(shoulder_widths) if shoulder_widths else 0.0
+
+    # 計算各群組自適應門檻（MAD-based robust statistics）
+    group_thresholds: dict[str, tuple[float, float]] = {}
+    for grp, speeds in group_speeds.items():
+        if len(speeds) >= 10:
+            med = statistics.median(speeds)
+            abs_devs = [abs(v - med) for v in speeds]
+            mad = statistics.median(abs_devs)
+            robust_std = 1.4826 * mad
+            if robust_std > 1e-6:
+                th_low  = med + 3 * robust_std
+                th_high = med + 5 * robust_std
+            else:
+                speeds_sorted = sorted(speeds)
+                n = len(speeds_sorted)
+                th_low  = speeds_sorted[int(n * 0.95)]
+                th_high = speeds_sorted[int(n * 0.99)]
+        elif len(speeds) >= 5:
+            speeds_sorted = sorted(speeds)
+            n = len(speeds_sorted)
+            th_low  = speeds_sorted[int(n * 0.95)]
+            th_high = speeds_sorted[int(n * 0.99)]
+        else:
+            th_low, th_high = _ANOM_SPEED_TH_LOW, _ANOM_SPEED_TH_HIGH
+
+        # 至少要大於固定下限，避免正常動作被誤判
+        th_low  = max(th_low,  _ANOM_SPEED_TH_LOW)
+        th_high = max(th_high, _ANOM_SPEED_TH_HIGH)
+        group_thresholds[grp] = (th_low, th_high)
+
+    return body_scale_ref, group_thresholds
 
 
 class VideoFileProcessor(QObject):
@@ -143,9 +293,21 @@ class VideoFileProcessor(QObject):
             frame_idx  = 0
             preview_every = max(1, self.frame_interval * 5)  # 每 5 個取樣幀更新一次預覽
 
-            # Occlusion detection state (MediaPipe only)
-            _occ_prev_reliable = [None] * 33  # 每個關節上一個可靠幀的 [x, y, z]
-            _occ_dt = self.frame_interval / fps  # 兩個分析幀的時間差（秒）
+            # Anomaly detection state (MediaPipe only)
+            _anomaly_prev_reliable = [None] * 33  # 每個關節上一個可靠幀的 [x, y, z]
+            _anomaly_dt = self.frame_interval / fps  # 兩個分析幀的時間差（秒）
+            _body_scale_ref    = 0.0
+            _group_thresholds: dict = {}
+
+            # Pass 1：預掃描影片，建立自適應速度門檻（MediaPipe only）
+            if self.backend_mode == 'MEDIAPIPE':
+                self.progress_updated.emit(4, 'Pass 1：建立速度分布...')
+                _body_scale_ref, _group_thresholds = _run_pass1(
+                    self.video_path, detector, self.frame_interval, fps
+                )
+                # 重置影片讀取位置，準備 Pass 2
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                frame_idx = 0
 
             while not self._cancelled:
                 ret, frame = cap.read()
@@ -161,27 +323,34 @@ class VideoFileProcessor(QObject):
                     landmarks_arr = None
 
                     native_draw_data = None
-                    joint_occlusion  = None
+                    joint_anomaly        = None
+                    joint_anomaly_detail = None
                     if detected:
                         landmarks_arr    = detector.get_landmarks_array()
                         native_draw_data = detector.get_native_draw_data_2d()
+
+                        # Anomaly detection BEFORE angle_calc (MediaPipe only)
+                        if self.backend_mode == 'MEDIAPIPE' and landmarks_arr and len(landmarks_arr) == 33:
+                            if _body_scale_ref > 1e-6:
+                                body_scale = _body_scale_ref
+                            else:
+                                L_SHO, R_SHO = landmarks_arr[11], landmarks_arr[12]
+                                body_scale = (
+                                    (L_SHO[0]-R_SHO[0])**2 +
+                                    (L_SHO[1]-R_SHO[1])**2 +
+                                    (L_SHO[2]-R_SHO[2])**2
+                                ) ** 0.5
+                            joint_anomaly, _anomaly_prev_reliable, joint_anomaly_detail = _compute_anomaly_mask(
+                                landmarks_arr, _anomaly_prev_reliable, body_scale, _anomaly_dt,
+                                group_thresholds=_group_thresholds,
+                            )
+
                         rula_left, rula_right = angle_calc(
-                            landmarks_arr, prev_left, prev_right
+                            landmarks_arr, prev_left, prev_right,
+                            joint_anomaly=joint_anomaly,
                         )
                         prev_left  = rula_left
                         prev_right = rula_right
-
-                        # Occlusion detection (MediaPipe only)
-                        if self.backend_mode == 'MEDIAPIPE' and landmarks_arr and len(landmarks_arr) == 33:
-                            L_SHO, R_SHO = landmarks_arr[11], landmarks_arr[12]
-                            body_scale = (
-                                (L_SHO[0]-R_SHO[0])**2 +
-                                (L_SHO[1]-R_SHO[1])**2 +
-                                (L_SHO[2]-R_SHO[2])**2
-                            ) ** 0.5
-                            joint_occlusion, _occ_prev_reliable = _compute_occlusion_mask(
-                                landmarks_arr, _occ_prev_reliable, body_scale, _occ_dt
-                            )
 
                         # 偶爾發送預覽畫面
                         if frame_idx % preview_every == 0:
@@ -282,8 +451,10 @@ class VideoFileProcessor(QObject):
                         'right_posture_score_b': rula_right.get('posture_score_b', 'NULL') if rula_right else 'NULL',
                         # 原生繪圖資料（保存所有關節，供歷史重播）
                         'native_draw_data':  serializable_native_draw_data,
-                        # 遮擋判定結果（MediaPipe only）：33 個 bool，True=可靠 False=疑似遮擋
-                        'joint_occlusion':   joint_occlusion,
+                        # 異常判定結果（MediaPipe only）：33 個 bool，True=可靠 False=疑似異常
+                        'joint_anomaly':        joint_anomaly,
+                        # 異常診斷明細（MediaPipe only）：33 個 None | {'reason','visibility','speed_ratio'}
+                        'joint_anomaly_detail': joint_anomaly_detail,
                     })
 
                     # 進度（5% ~ 95%）

@@ -623,9 +623,11 @@ class FrameMetricsDialog(QDialog):
 
     def _show_joint_popup(self, side: str, part_name: str):
         joints = _JOINT_GROUPS.get((side, part_name), [])
+        joint_anomaly_detail = self._rec.get('joint_anomaly_detail') or []
+
         popup = QDialog(self)
         popup.setWindowTitle(f'{part_name} — Joint Confidence')
-        popup.setMinimumWidth(300)
+        popup.setMinimumWidth(380)
         popup.setStyleSheet(
             'QDialog { background: #1e293b; } QLabel { background: transparent; }'
         )
@@ -637,27 +639,71 @@ class FrameMetricsDialog(QDialog):
         title_lbl.setStyleSheet('color: #94a3b8; font-size: 12px;')
         layout.addWidget(title_lbl)
 
+        # Header row
+        header_row = QHBoxLayout()
+        for txt, stretch in [('Joint', 3), ('Confidence', 2), ('Anomaly', 3), ('Speed ratio', 2)]:
+            h = QLabel(txt)
+            h.setStyleSheet('color: #64748b; font-size: 10px;')
+            if txt in ('Confidence', 'Speed ratio', 'Anomaly'):
+                h.setAlignment(Qt.AlignmentFlag.AlignRight)
+            header_row.addWidget(h, stretch)
+        layout.addLayout(header_row)
+
         for idx, name in joints:
             conf = self._get_conf(idx)
+            det  = joint_anomaly_detail[idx] if idx < len(joint_anomaly_detail) else None
+
+            # ── Confidence ──────────────────────────────────────────────
+            if conf is None:
+                conf_text, conf_color = 'N/A', '#94a3b8'
+            else:
+                passes = conf >= _MIN_CONF
+                conf_text  = f'{conf:.3f}  {"✓" if passes else "✗"}'
+                conf_color = '#4ade80' if passes else '#f87171'
+
+            # ── Anomaly reason ──────────────────────────────────────────
+            if det is None:
+                reason_text  = '—'
+                reason_color = '#4ade80'
+            else:
+                reason_map = {
+                    'low_visibility':    'low_vis',
+                    'speed_jump':        'speed_jump',
+                    'low_vis_speed_jump':'low_vis+spd',
+                }
+                reason_text  = reason_map.get(det.get('reason', ''), det.get('reason', '?'))
+                reason_color = '#fb923c'
+
+            # ── Speed ratio ─────────────────────────────────────────────
+            sr = det.get('speed_ratio') if det else None
+            sr_text  = f'{sr:.3f}' if sr is not None else '—'
+            sr_color = '#fb923c' if sr is not None else '#94a3b8'
+
             row = QHBoxLayout()
             name_lbl = QLabel(f'[{idx:2d}] {name}')
             name_lbl.setStyleSheet(
-                'color: #e2e8f0; font-size: 13px; font-family: Consolas, monospace;'
+                'color: #e2e8f0; font-size: 12px; font-family: Consolas, monospace;'
             )
-            if conf is None:
-                conf_text, color = 'N/A', '#94a3b8'
-            else:
-                passes = conf >= _MIN_CONF
-                conf_text = f'{conf:.3f}  {"✓" if passes else "✗"}'
-                color = '#4ade80' if passes else '#f87171'
             conf_lbl = QLabel(conf_text)
             conf_lbl.setStyleSheet(
-                f'color: {color}; font-size: 13px; font-family: Consolas, monospace;'
+                f'color: {conf_color}; font-size: 12px; font-family: Consolas, monospace;'
             )
             conf_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-            row.addWidget(name_lbl)
-            row.addStretch()
-            row.addWidget(conf_lbl)
+            reason_lbl = QLabel(reason_text)
+            reason_lbl.setStyleSheet(
+                f'color: {reason_color}; font-size: 12px; font-family: Consolas, monospace;'
+            )
+            reason_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            sr_lbl = QLabel(sr_text)
+            sr_lbl.setStyleSheet(
+                f'color: {sr_color}; font-size: 12px; font-family: Consolas, monospace;'
+            )
+            sr_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            row.addWidget(name_lbl, 3)
+            row.addWidget(conf_lbl, 2)
+            row.addWidget(reason_lbl, 3)
+            row.addWidget(sr_lbl, 2)
             layout.addLayout(row)
 
         close = QPushButton('Close')

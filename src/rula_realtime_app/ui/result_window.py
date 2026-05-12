@@ -600,6 +600,11 @@ class ResultWindow(QMainWindow):
         analysis_dur = self._results.get('analysis_duration_seconds')
         valid = sum(1 for r in self._records if isinstance(r.get('best_score'), int))
         invalid = len(self._records) - valid
+        anom_frames = sum(
+            1 for r in self._records
+            if r.get('joint_anomaly') and not all(r['joint_anomaly'])
+        )
+        anom_text = str(anom_frames) if anom_frames > 0 else '—'
         analysis_dur_text = '—'
         if isinstance(analysis_dur, (int, float)):
             analysis_dur_text = f'{analysis_dur:.1f} s'
@@ -614,6 +619,7 @@ class ResultWindow(QMainWindow):
             (analysis_dur_text,                   'result_stat_analysis_duration', '#0f766e', '#ccfbf1'),
             (str(stats.get('max_score') or '—'),   'result_stat_max',      '#991b1b', '#fee2e2'),
             (f"{stats.get('avg_score') or '—'}",   'result_stat_avg',      '#92400e', '#fef3c7'),
+            (anom_text,                            'result_stat_anom',     '#7c3aed', '#ede9fe'),
         ]
 
         self._stat_label_widgets = []  # keep refs to label QLabels for retranslation
@@ -880,13 +886,16 @@ class ResultWindow(QMainWindow):
                     if lms:
                         frame_rgb = _draw_mediapipe_skeleton(frame_rgb, lms)
 
-            # ── Occlusion overlay (MediaPipe only) ────────────────────────
-            joint_occlusion = rec.get('joint_occlusion')
-            if (joint_occlusion and isinstance(native, dict)
+            # ── Joint anomaly overlay (MediaPipe only) ────────────────────
+            joint_anomaly = rec.get('joint_anomaly')
+            print(f'[ANOM DEBUG] idx={idx} backend={native.get("backend") if isinstance(native,dict) else None} '
+                  f'joint_anomaly type={type(joint_anomaly)} len={len(joint_anomaly) if joint_anomaly else None} '
+                  f'false_count={joint_anomaly.count(False) if isinstance(joint_anomaly,list) else None}')
+            if (joint_anomaly and isinstance(native, dict)
                     and str(native.get('backend', '')).upper() == 'MEDIAPIPE'):
                 lms_2d = native.get('landmarks_2d') or []
                 h_fr, w_fr = frame_rgb.shape[:2]
-                for i, reliable in enumerate(joint_occlusion):
+                for i, reliable in enumerate(joint_anomaly):
                     if not reliable and i < len(lms_2d) and len(lms_2d[i]) >= 2:
                         cx = int(lms_2d[i][0] * w_fr)
                         cy = int(lms_2d[i][1] * h_fr)

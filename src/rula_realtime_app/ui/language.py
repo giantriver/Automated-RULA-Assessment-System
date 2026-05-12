@@ -1021,6 +1021,7 @@ TRANSLATIONS = {
     'result_stat_analysis_duration': {'en': 'Analysis Time', 'zh_TW': '分析時長'},
     'result_stat_max':      {'en': 'Max Score',      'zh_TW': '最高分'},
     'result_stat_avg':      {'en': 'Avg Score',      'zh_TW': '平均分'},
+    'result_stat_anom':     {'en': 'Anomaly Frames', 'zh_TW': '異常幀數'},
     'result_chart_title': {
         'en': 'RULA Score Trend  (click to jump)',
         'zh_TW': 'RULA 分數趨勢  （點擊跳幀）'

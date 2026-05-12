@@ -8,6 +8,16 @@ from .rula_tables import TABLE_A_DATA, TABLE_B_DATA, TABLE_C_DATA
 from .utils import safe_angle, check_confidence
 from .config import RULA_CONFIG, TOLERANCE_ANGLE, USE_PREVIOUS_FRAME_ON_LOW_CONFIDENCE
 
+
+def _joints_reliable(joint_anomaly, indices: list) -> bool:
+    """Returns False if any of the required joint indices is marked anomalous."""
+    if joint_anomaly is None:
+        return True
+    for idx in indices:
+        if idx < len(joint_anomaly) and not joint_anomaly[idx]:
+            return False
+    return True
+
 def rula_risk(point_score, wrist, trunk, upper_Shoulder, lower_Limb, neck,
               wrist_twist, legs, muscle_use_a, muscle_use_b, force_load_a, force_load_b):
     """依 RULA A/B/C 三表計算總分"""
@@ -40,9 +50,11 @@ def rula_risk(point_score, wrist, trunk, upper_Shoulder, lower_Limb, neck,
                     rula['score'] = str(tcval)
     return rula, point_score
 # import pprint
-def rula_score_side(pose, side: str, previous_scores=None):
+def rula_score_side(pose, side: str, previous_scores=None, joint_anomaly=None):
     """
     計算單側（Left/Right）RULA 分數
+    joint_anomaly: list[bool] | None，由 _compute_anomaly_mask 產生；
+                   任一必要關節異常時該角度回傳 NULL。
     """
     point_score = {}
     angle_data = {}
@@ -98,7 +110,8 @@ def rula_score_side(pose, side: str, previous_scores=None):
 
     # A-1: Upper Arm（上臂屈伸角）
     upper_arm_indices = [L_SHOULDER, L_ELBOW] if side == 'Left' else [R_SHOULDER, R_ELBOW]
-    if check_confidence(pose, upper_arm_indices + [L_HIP, R_HIP]):
+    if check_confidence(pose, upper_arm_indices + [L_HIP, R_HIP]) and \
+            _joints_reliable(joint_anomaly, upper_arm_indices + [L_HIP, R_HIP]):
         v_sh_el = EL - SH
         theta_upper = safe_angle(v_sh_el, v_body)
         angle_data['upper_arm_angle'] = round(theta_upper, 2)
@@ -122,7 +135,8 @@ def rula_score_side(pose, side: str, previous_scores=None):
 
     # A-2: Lower Arm（肘屈曲角）
     lower_arm_indices = [L_ELBOW, L_WRIST] if side == 'Left' else [R_ELBOW, R_WRIST]
-    if check_confidence(pose, lower_arm_indices + upper_arm_indices):
+    if check_confidence(pose, lower_arm_indices + upper_arm_indices) and \
+            _joints_reliable(joint_anomaly, lower_arm_indices + upper_arm_indices):
         v_el_wr = WR - EL  # 肘 -> 腕
         v_sh_el = EL - SH  # 肩 -> 肘
         theta_elbow = safe_angle(v_el_wr, v_sh_el)
@@ -143,7 +157,8 @@ def rula_score_side(pose, side: str, previous_scores=None):
 
     # A-3: Wrist Position（手腕屈伸角）- 根據 pipeline.md 方法
     wrist_indices = [L_WRIST, L_INDEX, L_PINKY] if side == 'Left' else [R_WRIST, R_INDEX, R_PINKY]
-    if HAND_C is not None and check_confidence(pose, wrist_indices + lower_arm_indices):
+    if HAND_C is not None and check_confidence(pose, wrist_indices + lower_arm_indices) and \
+            _joints_reliable(joint_anomaly, wrist_indices + lower_arm_indices):
         # 步驟1：計算前臂軸向量（肘→腕）
         forearm_vector = WR - EL  # 前臂軸（肘→腕向量）
 
@@ -172,7 +187,8 @@ def rula_score_side(pose, side: str, previous_scores=None):
 
     # B-1: Neck（頸角）- 矢狀面投影方法
     head_indices = [L_EAR, R_EAR]
-    if check_confidence(pose, head_indices + [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP]):
+    if check_confidence(pose, head_indices + [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP]) and \
+            _joints_reliable(joint_anomaly, head_indices + [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP]):
         # 步驟1：身體向上向量（髖→肩）
         v_u = SHO_C - HIP_C
 
@@ -240,7 +256,8 @@ def rula_score_side(pose, side: str, previous_scores=None):
 
     # B-2: Trunk（軀幹角）
     trunk_indices = [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP]
-    if check_confidence(pose, trunk_indices):
+    if check_confidence(pose, trunk_indices) and \
+            _joints_reliable(joint_anomaly, trunk_indices):
         t = SHO_C - HIP_C  # 軀幹向量（髖→肩，向上）
         VERTICAL_UP = np.array([0, -1, 0])  # 垂直向上參考向量（MediaPipe 坐標系）
         theta_trunk = safe_angle(t, VERTICAL_UP)  # 計算軀幹與垂直方向的夾角
@@ -301,14 +318,18 @@ def rula_score_side(pose, side: str, previous_scores=None):
 
     return rula
 
-def angle_calc(pose, previous_left=None, previous_right=None):
-    """計算左右側 RULA 分數"""
+def angle_calc(pose, previous_left=None, previous_right=None, joint_anomaly=None):
+    """計算左右側 RULA 分數
+
+    joint_anomaly: list[bool] | None，由 _compute_anomaly_mask 產生；
+                   任一必要關節異常時該角度回傳 NULL。
+    """
     try:
         if not pose or len(pose) < 33:
             return ({"score": "NULL"}, {"score": "NULL"})
 
-        rula_left = rula_score_side(pose, 'Left', previous_left)
-        rula_right = rula_score_side(pose, 'Right', previous_right)
+        rula_left  = rula_score_side(pose, 'Left',  previous_left,  joint_anomaly)
+        rula_right = rula_score_side(pose, 'Right', previous_right, joint_anomaly)
 
         return (rula_left, rula_right)
     except Exception as e:
