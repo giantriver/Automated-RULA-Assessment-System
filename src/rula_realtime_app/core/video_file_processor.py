@@ -22,6 +22,7 @@ _ANOM_VIS_TH       = 0.50   # visibility 低於此值 → 直接不可靠
 _ANOM_VIS_MID_TH   = 0.80   # visibility 中間帶
 _ANOM_SPEED_TH_LOW  = 3.0   # 正規化速度門檻（中）：中等 visibility 時觸發
 _ANOM_SPEED_TH_HIGH = 10.0  # 正規化速度門檻（極端）：任何 visibility 都觸發
+_ANOM_MAX_GAP_SECONDS = 1.0  # Pass 1 使用的最大觀測間隔（秒）
 
 # MediaPipe 33 點關節群組（用於建立各群組速度分布）
 _JOINT_GROUPS: dict[str, list[int]] = {
@@ -40,16 +41,19 @@ _JOINT_TO_GROUP: dict[int, str] = {
 }
 
 
-def _compute_anomaly_mask(landmarks_arr, prev_reliable, body_scale, dt,
+def _compute_anomaly_mask(landmarks_arr, prev_reliable, body_scale, dt, current_frame_idx,
+                          frame_interval: int,
                           group_thresholds: dict | None = None):
     """
     判斷 MediaPipe 33 個關節點是否可靠（非異常）。
 
     Args:
         landmarks_arr:    33 × [x, y, z, vis]，MediaPipe world coordinates
-        prev_reliable:    list[list|None]，每個關節上一個可靠幀的 [x, y, z]
+        prev_reliable:    list[dict|None]，每個關節上一個可靠幀的 {pos, frame_idx}
         body_scale:       人體尺度參考（肩寬），用來正規化速度
         dt:               兩個分析幀之間的實際時間差（秒）
+        current_frame_idx: 目前分析幀索引，用來計算 gap_seconds
+        frame_interval:    抽樣間隔（幀）
         group_thresholds: {group_name: (th_low, th_high)}，由 Pass 1 計算；None 時退回固定值
 
     Returns:
@@ -76,9 +80,27 @@ def _compute_anomaly_mask(landmarks_arr, prev_reliable, body_scale, dt,
             reason = 'low_visibility'
         else:
             prev = prev_reliable[i]
-            if prev is not None and dt > 1e-9 and body_scale > 1e-6:
-                jump = ((x - prev[0])**2 + (y - prev[1])**2 + (z - prev[2])**2) ** 0.5
-                speed_ratio = (jump / dt) / body_scale
+            prev_pos = None
+            prev_frame_idx = None
+            if isinstance(prev, dict):
+                prev_pos = prev.get('pos')
+                prev_frame_idx = prev.get('frame_idx')
+            elif isinstance(prev, (list, tuple)) and len(prev) >= 3:
+                prev_pos = prev
+
+            elapsed_seconds = dt
+            if prev_frame_idx is not None and current_frame_idx is not None and prev_frame_idx >= 0:
+                elapsed_seconds = ((current_frame_idx - prev_frame_idx) / max(1, frame_interval)) * dt
+
+            if prev_pos is not None and elapsed_seconds > 1e-9 and body_scale > 1e-6:
+                gap_seconds = elapsed_seconds
+                if gap_seconds <= _ANOM_MAX_GAP_SECONDS:
+                    jump = ((x - prev_pos[0])**2 + (y - prev_pos[1])**2 + (z - prev_pos[2])**2) ** 0.5
+                    speed_ratio = (jump / gap_seconds) / body_scale
+                else:
+                    speed_ratio = None
+
+            if speed_ratio is not None:
                 if speed_ratio > th_high:
                     reliable = False
                     reason = 'speed_jump'
@@ -88,7 +110,7 @@ def _compute_anomaly_mask(landmarks_arr, prev_reliable, body_scale, dt,
 
         mask.append(reliable)
         if reliable:
-            new_prev[i] = [x, y, z]
+            new_prev[i] = {'pos': [x, y, z], 'frame_idx': current_frame_idx}
             detail.append(None)
         else:
             detail.append({
@@ -121,10 +143,11 @@ def _run_pass1(
         return 0.0, {}
 
     shoulder_widths: list[float] = []
-    group_speeds: dict[str, list[float]] = {g: [] for g in _JOINT_GROUPS}
+    # Collect raw speeds (jump / dt) during Pass 1, normalize after body_scale_ref is computed
+    group_raw_speeds: dict[str, list[float]] = {g: [] for g in _JOINT_GROUPS}
 
-    prev_reliable: list = [None] * 33
-    prev_frame_idx = -1
+    prev_reliable_pos: list = [None] * 33
+    prev_reliable_frame_idx: list[int] = [-1] * 33
     frame_idx = 0
 
     while True:
@@ -149,31 +172,37 @@ def _run_pass1(
                             shoulder_widths.append(sw)
 
                     # 收集各群組速度樣本（只用高 visibility 點）
-                    if prev_frame_idx >= 0:
-                        dt = (frame_idx - prev_frame_idx) / fps
-                        for i, lm in enumerate(arr):
-                            grp = _JOINT_TO_GROUP.get(i)
-                            if grp is None:
-                                continue
-                            if float(lm[3]) < vis_high:
-                                continue
-                            prev = prev_reliable[i]
-                            if prev is None:
-                                continue
-                            jump = (
-                                (lm[0] - prev[0]) ** 2 +
-                                (lm[1] - prev[1]) ** 2 +
-                                (lm[2] - prev[2]) ** 2
-                            ) ** 0.5
-                            tmp_scale = shoulder_widths[-1] if shoulder_widths else 0.1
-                            speed_ratio = (jump / dt) / tmp_scale if dt > 1e-9 else 0.0
-                            group_speeds[grp].append(speed_ratio)
+                    for i, lm in enumerate(arr):
+                        grp = _JOINT_TO_GROUP.get(i)
+                        if grp is None:
+                            continue
+                        if float(lm[3]) < vis_high:
+                            continue
+
+                        prev_pos = prev_reliable_pos[i]
+                        prev_idx = prev_reliable_frame_idx[i]
+                        if prev_pos is None or prev_idx < 0:
+                            continue
+
+                        gap_seconds = (frame_idx - prev_idx) / fps
+                        if gap_seconds > _ANOM_MAX_GAP_SECONDS:
+                            continue
+
+                        jump = (
+                            (lm[0] - prev_pos[0]) ** 2 +
+                            (lm[1] - prev_pos[1]) ** 2 +
+                            (lm[2] - prev_pos[2]) ** 2
+                        ) ** 0.5
+                        # Collect raw world-space speed (jump/dt). We'll normalize
+                        # by the final body_scale_ref after the full scan completes.
+                        raw_speed = (jump / gap_seconds) if gap_seconds > 1e-9 else 0.0
+                        group_raw_speeds[grp].append(raw_speed)
 
                     # 更新 prev_reliable（Pass 1 全用高 visibility 的點）
                     for i, lm in enumerate(arr):
                         if float(lm[3]) >= vis_high:
-                            prev_reliable[i] = [lm[0], lm[1], lm[2]]
-                    prev_frame_idx = frame_idx
+                            prev_reliable_pos[i] = [lm[0], lm[1], lm[2]]
+                            prev_reliable_frame_idx[i] = frame_idx
 
         frame_idx += 1
 
@@ -182,9 +211,16 @@ def _run_pass1(
     # 計算 body_scale_ref（中位數）
     body_scale_ref = statistics.median(shoulder_widths) if shoulder_widths else 0.0
 
-    # 計算各群組自適應門檻（MAD-based robust statistics）
+    # Normalize collected raw speeds by body_scale_ref (if available) and
+    # compute per-group adaptive thresholds using robust statistics.
     group_thresholds: dict[str, tuple[float, float]] = {}
-    for grp, speeds in group_speeds.items():
+    for grp, raw_speeds in group_raw_speeds.items():
+        # If we have a valid body_scale_ref, convert raw speeds to speed_ratio
+        if body_scale_ref and body_scale_ref > 1e-6:
+            speeds = [rs / body_scale_ref for rs in raw_speeds]
+        else:
+            speeds = []
+
         if len(speeds) >= 10:
             med = statistics.median(speeds)
             abs_devs = [abs(v - med) for v in speeds]
@@ -205,10 +241,6 @@ def _run_pass1(
             th_high = speeds_sorted[int(n * 0.99)]
         else:
             th_low, th_high = _ANOM_SPEED_TH_LOW, _ANOM_SPEED_TH_HIGH
-
-        # 至少要大於固定下限，避免正常動作被誤判
-        th_low  = max(th_low,  _ANOM_SPEED_TH_LOW)
-        th_high = max(th_high, _ANOM_SPEED_TH_HIGH)
         group_thresholds[grp] = (th_low, th_high)
 
     return body_scale_ref, group_thresholds
@@ -342,6 +374,7 @@ class VideoFileProcessor(QObject):
                                 ) ** 0.5
                             joint_anomaly, _anomaly_prev_reliable, joint_anomaly_detail = _compute_anomaly_mask(
                                 landmarks_arr, _anomaly_prev_reliable, body_scale, _anomaly_dt,
+                                frame_idx, self.frame_interval,
                                 group_thresholds=_group_thresholds,
                             )
 
