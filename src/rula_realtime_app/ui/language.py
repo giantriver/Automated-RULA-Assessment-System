@@ -15,7 +15,7 @@ class LanguageManager:
     }
     
     # 默认语言
-    DEFAULT_LANGUAGE = 'en'
+    DEFAULT_LANGUAGE = 'zh_TW'
     
     def __init__(self):
         self.current_language = self.DEFAULT_LANGUAGE
@@ -213,6 +213,72 @@ TRANSLATIONS = {
     'panel_coordinates': {
         'en': 'Joint Coordinates',
         'zh_TW': '關節座標'
+    },
+
+    # Joint confidence popup
+    'joint_confidence_title': {
+        'en': 'Joint Confidence',
+        'zh_TW': '關節可靠度'
+    },
+    'joint_confidence_required': {
+        'en': '<b>{part}</b> required keypoints',
+        'zh_TW': '<b>{part}</b> 需要的關鍵點'
+    },
+    'joint_confidence_joint': {
+        'en': 'Joint',
+        'zh_TW': '關節'
+    },
+    'joint_confidence_confidence': {
+        'en': 'Confidence',
+        'zh_TW': '可信度'
+    },
+    'joint_confidence_anomaly': {
+        'en': 'Anomaly',
+        'zh_TW': '異常'
+    },
+    'joint_confidence_speed_ratio': {
+        'en': 'Speed ratio',
+        'zh_TW': '速度比'
+    },
+    'joint_confidence_thresholds': {
+        'en': 'Group thresholds: {thresholds}',
+        'zh_TW': '群組門檻: {thresholds}'
+    },
+    'joint_confidence_close': {
+        'en': 'Close',
+        'zh_TW': '關閉'
+    },
+    'joint_confidence_na': {
+        'en': 'N/A',
+        'zh_TW': 'N/A'
+    },
+    'joint_confidence_none': {
+        'en': '—',
+        'zh_TW': '—'
+    },
+    'joint_confidence_reason_low_vis': {
+        'en': 'low_vis',
+        'zh_TW': '低可見'
+    },
+    'joint_confidence_reason_speed_jump': {
+        'en': 'speed_jump',
+        'zh_TW': '速度跳躍'
+    },
+    'joint_group_trunk': {
+        'en': 'trunk',
+        'zh_TW': '軀幹'
+    },
+    'joint_group_head': {
+        'en': 'head',
+        'zh_TW': '頭部'
+    },
+    'joint_group_arm': {
+        'en': 'arm',
+        'zh_TW': '手臂'
+    },
+    'joint_group_hand': {
+        'en': 'hand',
+        'zh_TW': '手部'
     },
     
     # RULA 参数名称

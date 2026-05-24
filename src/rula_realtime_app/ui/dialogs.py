@@ -394,6 +394,15 @@ _JOINT_GROUPS = {
                               (23, 'L Hip'), (24, 'R Hip')],
 }
 
+_JOINT_TO_GROUP = {
+    0: 'head', 7: 'head', 8: 'head',
+    11: 'trunk', 12: 'trunk', 23: 'trunk', 24: 'trunk',
+    13: 'arm', 14: 'arm',
+    15: 'hand', 16: 'hand', 17: 'hand', 18: 'hand', 19: 'hand', 20: 'hand',
+}
+
+_GROUP_ORDER = ['trunk', 'head', 'arm', 'hand']
+
 _MIN_CONF = 0.5
 
 
@@ -624,9 +633,10 @@ class FrameMetricsDialog(QDialog):
     def _show_joint_popup(self, side: str, part_name: str):
         joints = _JOINT_GROUPS.get((side, part_name), [])
         joint_anomaly_detail = self._rec.get('joint_anomaly_detail') or []
+        group_thresholds = self._rec.get('joint_group_thresholds') or {}
 
         popup = QDialog(self)
-        popup.setWindowTitle(f'{part_name} — Joint Confidence')
+        popup.setWindowTitle(f'{part_name} — {t("joint_confidence_title")}')
         popup.setMinimumWidth(380)
         popup.setStyleSheet(
             'QDialog { background: #1e293b; } QLabel { background: transparent; }'
@@ -635,49 +645,89 @@ class FrameMetricsDialog(QDialog):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(6)
 
-        title_lbl = QLabel(f'<b>{part_name}</b> required keypoints')
+        title_lbl = QLabel(t('joint_confidence_required').format(part=part_name))
         title_lbl.setStyleSheet('color: #94a3b8; font-size: 12px;')
         layout.addWidget(title_lbl)
 
+        groups = []
+        for idx, _name in joints:
+            grp = _JOINT_TO_GROUP.get(idx)
+            if grp and grp not in groups:
+                groups.append(grp)
+
+        if groups:
+            pieces = []
+            for grp in _GROUP_ORDER:
+                if grp not in groups:
+                    continue
+                th_speed = group_thresholds.get(grp)
+                th_text = f'{th_speed:.3f}' if isinstance(th_speed, (int, float)) else t('joint_confidence_na')
+                pieces.append(f'{t("joint_group_" + grp)}={th_text}')
+            thresholds_lbl = QLabel(t('joint_confidence_thresholds').format(thresholds=', '.join(pieces)))
+            thresholds_lbl.setStyleSheet('color: #94a3b8; font-size: 11px;')
+            layout.addWidget(thresholds_lbl)
+
         # Header row
         header_row = QHBoxLayout()
-        for txt, stretch in [('Joint', 3), ('Confidence', 2), ('Anomaly', 3), ('Speed ratio', 2)]:
+        header_items = [
+            (t('joint_confidence_joint'), 3),
+            (t('joint_confidence_confidence'), 2),
+            (t('joint_confidence_anomaly'), 3),
+            (t('joint_confidence_speed_ratio'), 2),
+        ]
+        for txt, stretch in header_items:
             h = QLabel(txt)
             h.setStyleSheet('color: #64748b; font-size: 10px;')
-            if txt in ('Confidence', 'Speed ratio', 'Anomaly'):
+            if txt in (t('joint_confidence_confidence'), t('joint_confidence_speed_ratio'), t('joint_confidence_anomaly')):
                 h.setAlignment(Qt.AlignmentFlag.AlignRight)
             header_row.addWidget(h, stretch)
         layout.addLayout(header_row)
 
+        rows = []
         for idx, name in joints:
             conf = self._get_conf(idx)
-            det  = joint_anomaly_detail[idx] if idx < len(joint_anomaly_detail) else None
+            det = joint_anomaly_detail[idx] if idx < len(joint_anomaly_detail) else None
+            sr = det.get('speed_ratio') if isinstance(det, dict) else None
+            is_anomaly = bool(det and det.get('reason'))
+
+            # Sort by anomaly -> confidence -> speed ratio -> index
+            anomaly_order = 0 if is_anomaly else 1
+            conf_order = conf if conf is not None else 2.0
+            sr_order = -(sr if sr is not None else -1.0)
+            rows.append((anomaly_order, conf_order, sr_order, idx, name, conf, det, sr))
+
+        rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
+
+        for _, _, _, idx, name, conf, det, sr in rows:
 
             # ── Confidence ──────────────────────────────────────────────
             if conf is None:
-                conf_text, conf_color = 'N/A', '#94a3b8'
+                conf_text, conf_color = t('joint_confidence_na'), '#94a3b8'
             else:
                 passes = conf >= _MIN_CONF
                 conf_text  = f'{conf:.3f}  {"✓" if passes else "✗"}'
                 conf_color = '#4ade80' if passes else '#f87171'
 
             # ── Anomaly reason ──────────────────────────────────────────
-            if det is None:
-                reason_text  = '—'
+            if not isinstance(det, dict) or not det.get('reason'):
+                reason_text  = t('joint_confidence_none')
                 reason_color = '#4ade80'
             else:
                 reason_map = {
-                    'low_visibility':    'low_vis',
-                    'speed_jump':        'speed_jump',
-                    'low_vis_speed_jump':'low_vis+spd',
+                    'low_visibility':    t('joint_confidence_reason_low_vis'),
+                    'speed_jump':        t('joint_confidence_reason_speed_jump'),
                 }
                 reason_text  = reason_map.get(det.get('reason', ''), det.get('reason', '?'))
                 reason_color = '#fb923c'
 
             # ── Speed ratio ─────────────────────────────────────────────
-            sr = det.get('speed_ratio') if det else None
-            sr_text  = f'{sr:.3f}' if sr is not None else '—'
-            sr_color = '#fb923c' if sr is not None else '#94a3b8'
+            speed_checked = bool(det and det.get('speed_checked'))
+            if not speed_checked:
+                sr_text = t('joint_confidence_na')
+                sr_color = '#94a3b8'
+            else:
+                sr_text = f'{sr:.3f}' if sr is not None else t('joint_confidence_none')
+                sr_color = '#fb923c' if sr is not None else '#94a3b8'
 
             row = QHBoxLayout()
             name_lbl = QLabel(f'[{idx:2d}] {name}')
@@ -706,7 +756,7 @@ class FrameMetricsDialog(QDialog):
             row.addWidget(sr_lbl, 2)
             layout.addLayout(row)
 
-        close = QPushButton('Close')
+        close = QPushButton(t('joint_confidence_close'))
         close.setStyleSheet(
             'QPushButton { background:#334155; color:#e2e8f0; border-radius:6px;'
             'padding:4px 14px; font-size:12px; }'

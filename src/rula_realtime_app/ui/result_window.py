@@ -888,6 +888,7 @@ class ResultWindow(QMainWindow):
 
             # ── Joint anomaly overlay (MediaPipe only) ────────────────────
             joint_anomaly = rec.get('joint_anomaly')
+            joint_anomaly_detail = rec.get('joint_anomaly_detail') or []
             print(f'[ANOM DEBUG] idx={idx} backend={native.get("backend") if isinstance(native,dict) else None} '
                   f'joint_anomaly type={type(joint_anomaly)} len={len(joint_anomaly) if joint_anomaly else None} '
                   f'false_count={joint_anomaly.count(False) if isinstance(joint_anomaly,list) else None}')
@@ -899,12 +900,21 @@ class ResultWindow(QMainWindow):
                     if not reliable and i < len(lms_2d) and len(lms_2d[i]) >= 2:
                         cx = int(lms_2d[i][0] * w_fr)
                         cy = int(lms_2d[i][1] * h_fr)
-                        # 橘紅色 X 標記（外框白色增加對比）
-                        d = 8
-                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 255, 255), 4)
-                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 255, 255), 4)
-                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80, 0),   2)
-                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80, 0),   2)
+                        detail = joint_anomaly_detail[i] if i < len(joint_anomaly_detail) else None
+                        reason = detail.get('reason') if isinstance(detail, dict) else None
+                        d = 10
+                        if reason == 'speed_jump':
+                            # 紅色三角形標記
+                            p1 = (cx, cy - d)
+                            p2 = (cx - d, cy + d)
+                            p3 = (cx + d, cy + d)
+                            cv2.polylines(frame_rgb, [np.array([p1, p2, p3])], True, (255, 0, 0), 3)
+                        else:
+                            # 橘紅色 X 標記（外框白色增加對比）
+                            cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 255, 255), 5)
+                            cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 255, 255), 5)
+                            cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80, 0),   3)
+                            cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80, 0),   3)
             score = rec.get('best_score')
             txt   = f"RULA: {score if score is not None else 'NULL'}"
             cv2.putText(frame_rgb, txt, (10, 32),
