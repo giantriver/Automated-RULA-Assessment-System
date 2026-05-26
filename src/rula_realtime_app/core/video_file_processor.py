@@ -20,6 +20,7 @@ from .config import RULA_CONFIG
 # 預設值，未來透過實驗校正
 _ANOM_VIS_TH       = 0.50   # visibility 低於此值 → 直接不可靠
 _ANOM_MAX_GAP_SECONDS = 1.0  # Pass 1 / Pass 2 共同使用的最大觀測間隔（秒）
+_ANOM_MIN_JUMP_RATIO = 0.3  # 自適應閥值的保護下限（避免低動作影片 threshold collapse）
 
 # MediaPipe 33 點關節群組（用於建立各群組速度分布）
 _JOINT_GROUPS: dict[str, list[int]] = {
@@ -213,6 +214,8 @@ def _run_pass1(
     # Normalize collected raw speeds by body_scale_ref (if available) and
     # compute per-group adaptive thresholds using robust statistics.
     group_thresholds: dict[str, float] = {}
+    sample_dt = (frame_interval / fps) if fps > 1e-9 else 0.0
+    min_speed_th = (_ANOM_MIN_JUMP_RATIO / sample_dt) if sample_dt > 1e-9 else None
     for grp, raw_speeds in group_raw_speeds.items():
         # If we have a valid body_scale_ref, convert raw speeds to speed_ratio
         if body_scale_ref and body_scale_ref > 1e-6:
@@ -226,11 +229,19 @@ def _run_pass1(
             mad = statistics.median(abs_devs)
             robust_std = 1.4826 * mad
             if robust_std > 1e-6:
-                th_speed = med + 5 * robust_std
+                adaptive_th = med + 5 * robust_std
             else:
-                th_speed = None
+                adaptive_th = None
         else:
-            th_speed = None
+            adaptive_th = None
+
+        if min_speed_th is None:
+            th_speed = adaptive_th
+        elif adaptive_th is None:
+            th_speed = min_speed_th
+        else:
+            th_speed = max(adaptive_th, min_speed_th)
+
         group_thresholds[grp] = th_speed
 
     return body_scale_ref, group_thresholds
@@ -315,14 +326,14 @@ class VideoFileProcessor(QObject):
             frame_idx  = 0
             preview_every = max(1, self.frame_interval * 5)  # 每 5 個取樣幀更新一次預覽
 
-            # Anomaly detection state (MediaPipe only)
+            # Anomaly detection state (backend-agnostic; requires 33-point pose)
             _anomaly_prev_reliable = [None] * 33  # 每個關節上一個可靠幀的 {'pos','frame_idx'}
             _anomaly_dt = self.frame_interval / fps  # 兩個分析幀的時間差（秒）
             _body_scale_ref    = 0.0
             _group_thresholds: dict = {}
 
-            # Pass 1：預掃描影片，建立自適應速度門檻（MediaPipe only）
-            if self.backend_mode == 'MEDIAPIPE':
+            # Pass 1：預掃描影片，建立自適應速度門檻（支援任何 33 點 pose backend）
+            if self.backend_mode in ('MEDIAPIPE', 'RTMW3D'):
                 self.progress_updated.emit(4, 'Pass 1：建立速度分布...')
                 _body_scale_ref, _group_thresholds = _run_pass1(
                     self.video_path, detector, self.frame_interval, fps
@@ -351,8 +362,8 @@ class VideoFileProcessor(QObject):
                         landmarks_arr    = detector.get_landmarks_array()
                         native_draw_data = detector.get_native_draw_data_2d()
 
-                        # Anomaly detection BEFORE angle_calc (MediaPipe only)
-                        if self.backend_mode == 'MEDIAPIPE' and landmarks_arr and len(landmarks_arr) == 33:
+                        # Anomaly detection BEFORE angle_calc (backend-agnostic)
+                        if landmarks_arr and len(landmarks_arr) == 33:
                             if _body_scale_ref > 1e-6:
                                 body_scale = _body_scale_ref
                             else:
@@ -474,12 +485,12 @@ class VideoFileProcessor(QObject):
                         'right_posture_score_b': rula_right.get('posture_score_b', 'NULL') if rula_right else 'NULL',
                         # 原生繪圖資料（保存所有關節，供歷史重播）
                         'native_draw_data':  serializable_native_draw_data,
-                        # 異常判定結果（MediaPipe only）：33 個 bool，True=可靠 False=疑似異常
+                        # 異常判定結果：33 個 bool，True=可靠 False=疑似異常
                         'joint_anomaly':        joint_anomaly,
-                        # 異常診斷明細（MediaPipe only）：33 個 None | {'reason','visibility','speed_ratio'}
+                        # 異常診斷明細：33 個 None | {'reason','visibility','speed_ratio'}
                         'joint_anomaly_detail': joint_anomaly_detail,
-                        # 速度門檻（MediaPipe only）：每群組一個 th_speed（或 None）
-                        'joint_group_thresholds': _group_thresholds if self.backend_mode == 'MEDIAPIPE' else None,
+                        # 速度門檻：每群組一個 th_speed（或 None）
+                        'joint_group_thresholds': _group_thresholds if _group_thresholds else None,
                     })
 
                     # 進度（5% ~ 95%）

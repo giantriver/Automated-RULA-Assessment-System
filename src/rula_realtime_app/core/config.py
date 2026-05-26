@@ -2,6 +2,9 @@
 配置檔案 - 集中管理所有設定參數
 """
 
+import os
+from pathlib import Path
+
 import numpy as np
 
 # === 姿勢辨識後端選擇 ===
@@ -128,4 +131,50 @@ def convert_indexed_keypoints_to_pose33(keypoints_xyz, keypoint_scores, index_ma
         pose[dst_idx] = [float(x), float(y), float(z), conf]
 
     return pose
+
+
+def _register_cuda_dll_dirs() -> None:
+    """Register Windows DLL search paths for CUDA/cuDNN packaged in the venv."""
+    if os.name != 'nt':
+        return
+
+    try:
+        import site
+    except Exception:
+        return
+
+    pkg_root = Path(site.getsitepackages()[-1]) / 'nvidia'
+    candidate_dirs = [
+        pkg_root / 'cudnn' / 'bin',
+        pkg_root / 'cublas' / 'bin',
+        pkg_root / 'cuda_nvrtc' / 'bin',
+    ]
+
+    for env_name in ('CUDA_PATH', 'CUDA_PATH_V12_4'):
+        cuda_root = os.environ.get(env_name)
+        if cuda_root:
+            candidate_dirs.append(Path(cuda_root) / 'bin')
+
+    add_dll_directory = getattr(os, 'add_dll_directory', None)
+    if add_dll_directory is None:
+        return
+
+    existing_path = os.environ.get('PATH', '')
+    path_parts = existing_path.split(os.pathsep) if existing_path else []
+
+    for dll_dir in candidate_dirs:
+        if dll_dir.exists():
+            try:
+                add_dll_directory(str(dll_dir))
+            except OSError:
+                pass
+
+            dll_dir_str = str(dll_dir)
+            if dll_dir_str not in path_parts:
+                path_parts.insert(0, dll_dir_str)
+
+    os.environ['PATH'] = os.pathsep.join(path_parts)
+
+
+_register_cuda_dll_dirs()
 

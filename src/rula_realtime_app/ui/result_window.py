@@ -29,6 +29,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QFont
 
 from ..core.video_file_processor import export_csv
+from ..core.config import RTMW_TO_MEDIAPIPE
 from .styles import (
     UPLOAD_BG_STYLE, CONTENT_CARD_STYLE, HEADER_CARD_STYLE,
     BACK_BTN_STYLE, EMERALD_BTN_STYLE,
@@ -886,35 +887,44 @@ class ResultWindow(QMainWindow):
                     if lms:
                         frame_rgb = _draw_mediapipe_skeleton(frame_rgb, lms)
 
-            # ── Joint anomaly overlay (MediaPipe only) ────────────────────
+            # ── Joint anomaly overlay (MediaPipe / RTMW3D) ───────────────
             joint_anomaly = rec.get('joint_anomaly')
             joint_anomaly_detail = rec.get('joint_anomaly_detail') or []
-            print(f'[ANOM DEBUG] idx={idx} backend={native.get("backend") if isinstance(native,dict) else None} '
-                  f'joint_anomaly type={type(joint_anomaly)} len={len(joint_anomaly) if joint_anomaly else None} '
-                  f'false_count={joint_anomaly.count(False) if isinstance(joint_anomaly,list) else None}')
-            if (joint_anomaly and isinstance(native, dict)
-                    and str(native.get('backend', '')).upper() == 'MEDIAPIPE'):
-                lms_2d = native.get('landmarks_2d') or []
+            backend_name = str(native.get('backend', '')).upper() if isinstance(native, dict) else ''
+            if joint_anomaly and isinstance(native, dict) and backend_name in ('MEDIAPIPE', 'RTMW3D'):
                 h_fr, w_fr = frame_rgb.shape[:2]
+                if backend_name == 'RTMW3D':
+                    lms_2d = native.get('keypoints_2d_norm') or []
+                    idx_mapper = RTMW_TO_MEDIAPIPE
+                else:
+                    lms_2d = native.get('landmarks_2d') or []
+                    idx_mapper = {i: i for i in range(len(lms_2d))}
+
                 for i, reliable in enumerate(joint_anomaly):
-                    if not reliable and i < len(lms_2d) and len(lms_2d[i]) >= 2:
-                        cx = int(lms_2d[i][0] * w_fr)
-                        cy = int(lms_2d[i][1] * h_fr)
-                        detail = joint_anomaly_detail[i] if i < len(joint_anomaly_detail) else None
-                        reason = detail.get('reason') if isinstance(detail, dict) else None
-                        d = 10
-                        if reason == 'speed_jump':
-                            # 紅色三角形標記
-                            p1 = (cx, cy - d)
-                            p2 = (cx - d, cy + d)
-                            p3 = (cx + d, cy + d)
-                            cv2.polylines(frame_rgb, [np.array([p1, p2, p3])], True, (255, 0, 0), 3)
-                        else:
-                            # 橘紅色 X 標記（外框白色增加對比）
-                            cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 255, 255), 5)
-                            cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 255, 255), 5)
-                            cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80, 0),   3)
-                            cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80, 0),   3)
+                    if reliable:
+                        continue
+
+                    src_idx = idx_mapper.get(i)
+                    if src_idx is None or src_idx >= len(lms_2d) or len(lms_2d[src_idx]) < 2:
+                        continue
+
+                    cx = int(lms_2d[src_idx][0] * w_fr)
+                    cy = int(lms_2d[src_idx][1] * h_fr)
+                    detail = joint_anomaly_detail[i] if i < len(joint_anomaly_detail) else None
+                    reason = detail.get('reason') if isinstance(detail, dict) else None
+                    d = 10
+                    if reason == 'speed_jump':
+                        # 紅色三角形標記
+                        p1 = (cx, cy - d)
+                        p2 = (cx - d, cy + d)
+                        p3 = (cx + d, cy + d)
+                        cv2.polylines(frame_rgb, [np.array([p1, p2, p3])], True, (255, 0, 0), 3)
+                    else:
+                        # 橘紅色 X 標記（外框白色增加對比）
+                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 255, 255), 5)
+                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 255, 255), 5)
+                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80, 0),   3)
+                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80, 0),   3)
             score = rec.get('best_score')
             txt   = f"RULA: {score if score is not None else 'NULL'}"
             cv2.putText(frame_rgb, txt, (10, 32),

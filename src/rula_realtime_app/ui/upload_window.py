@@ -387,6 +387,10 @@ class UploadWindow(QMainWindow):
             QMessageBox.warning(self, t('upload_no_file_title'), t('upload_no_file_msg'))
             return
 
+        # Reuse one processing slot at a time. If a previous analysis is still
+        # around, stop it first to avoid destroying a running QThread.
+        self._cleanup_processing_thread(wait_ms=5000)
+
         meta = {
             'survey_date':  self._date_edit.date().toString('yyyy-MM-dd'),
             'assessor':     self._assessor_edit.text().strip(),
@@ -428,12 +432,32 @@ class UploadWindow(QMainWindow):
         self._proc_thread.start()
 
     def _cancel_analysis(self):
-        if self._processor:
-            self._processor.cancel()
-        if self._proc_thread and self._proc_thread.isRunning():
-            self._proc_thread.quit()
-            self._proc_thread.wait(3000)
+        self._cleanup_processing_thread(wait_ms=3000)
         self._reset_form_state()
+
+    def _cleanup_processing_thread(self, wait_ms: int = 3000):
+        processor = self._processor
+        thread = self._proc_thread
+
+        if processor is not None:
+            try:
+                processor.cancel()
+            except Exception:
+                pass
+
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(wait_ms)
+            finally:
+                try:
+                    thread.deleteLater()
+                except Exception:
+                    pass
+
+        self._processor = None
+        self._proc_thread = None
 
     # ── Worker signals ────────────────────────────────────────────────────────
     def _on_progress(self, pct: int, msg: str):
@@ -454,18 +478,14 @@ class UploadWindow(QMainWindow):
             pass
 
     def _on_complete(self, results: dict):
-        if self._proc_thread:
-            self._proc_thread.quit()
-            self._proc_thread.wait()
+        self._cleanup_processing_thread(wait_ms=5000)
 
         save_analysis(results)
         self._reset_form_state()
         self.analysis_done.emit(results)
 
     def _on_error(self, msg: str):
-        if self._proc_thread:
-            self._proc_thread.quit()
-            self._proc_thread.wait()
+        self._cleanup_processing_thread(wait_ms=5000)
         self._reset_form_state()
         QMessageBox.critical(self, t('upload_error_title'),
                              t('upload_error_msg').format(msg))
