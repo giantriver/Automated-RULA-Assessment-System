@@ -609,6 +609,8 @@ class ResultWindow(QMainWindow):
         analysis_dur_text = '—'
         if isinstance(analysis_dur, (int, float)):
             analysis_dur_text = f'{analysis_dur:.1f} s'
+        speed_anomaly_enabled = self._results.get('speed_anomaly_enabled', True)
+        speed_anomaly_text = t('common_on') if speed_anomaly_enabled else t('common_off')
 
         # Store value/label pairs so we can update label text on language change
         # Each entry: (value_str, key, text_color, bg_color)
@@ -618,12 +620,14 @@ class ResultWindow(QMainWindow):
             (str(invalid),                         'result_stat_invalid',  '#991b1b', '#fee2e2'),
             (f'{dur:.1f} s',                       'result_stat_duration', '#6d28d9', '#ede9fe'),
             (analysis_dur_text,                   'result_stat_analysis_duration', '#0f766e', '#ccfbf1'),
+            (speed_anomaly_text,                   'result_stat_speed_anomaly', '#0f766e', '#ccfbf1'),
             (str(stats.get('max_score') or '—'),   'result_stat_max',      '#991b1b', '#fee2e2'),
             (f"{stats.get('avg_score') or '—'}",   'result_stat_avg',      '#92400e', '#fef3c7'),
             (anom_text,                            'result_stat_anom',     '#7c3aed', '#ede9fe'),
         ]
 
         self._stat_label_widgets = []  # keep refs to label QLabels for retranslation
+        self._speed_anomaly_value_lbl = None
         stat_row = QHBoxLayout()
         stat_row.setSpacing(6)
         for value, _key, tc, bg in self._stat_items:
@@ -645,6 +649,8 @@ class ResultWindow(QMainWindow):
             cl.addWidget(ll)
             stat_row.addWidget(cell)
             self._stat_label_widgets.append(ll)
+            if _key == 'result_stat_speed_anomaly':
+                self._speed_anomaly_value_lbl = vl
 
         col.addLayout(stat_row)
         return card
@@ -823,6 +829,11 @@ class ResultWindow(QMainWindow):
         self._stat_title_lbl.setText(t('result_stat_title'))
         for lbl, (_val, key, _tc, _bg) in zip(self._stat_label_widgets, self._stat_items):
             lbl.setText(t(key))
+        if self._speed_anomaly_value_lbl is not None:
+            speed_anomaly_enabled = self._results.get('speed_anomaly_enabled', True)
+            self._speed_anomaly_value_lbl.setText(
+                t('common_on') if speed_anomaly_enabled else t('common_off')
+            )
 
         # Chart tab labels
         self._chart_tabs.setTabText(0, t('result_tab_trend'))

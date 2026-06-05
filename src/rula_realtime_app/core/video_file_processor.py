@@ -266,7 +266,8 @@ class VideoFileProcessor(QObject):
     def __init__(self, video_path: str, meta: dict,
                  frame_interval: int = 10,
                  backend_mode: str = 'RTMW3D',
-                 rula_params: dict | None = None):
+                 rula_params: dict | None = None,
+                 enable_speed_anomaly: bool = True):
         """
         Args:
             video_path:     影片檔案路徑
@@ -274,6 +275,7 @@ class VideoFileProcessor(QObject):
             frame_interval: 每隔幾幀取樣一次（預設 10）
             backend_mode:   姿勢偵測模式（'RTMW3D' 或 'MEDIAPIPE'）
             rula_params:    RULA 固定參數覆寫（wrist_twist, legs, muscle_use_a/b, force_load_a/b）
+            enable_speed_anomaly: 是否啟用速度異常偵測（關閉時僅用可信度）
         """
         super().__init__()
         self.video_path     = video_path
@@ -286,6 +288,7 @@ class VideoFileProcessor(QObject):
                 if key in rula_params:
                     merged_params[key] = int(rula_params[key])
         self.rula_params    = merged_params
+        self.enable_speed_anomaly = bool(enable_speed_anomaly)
         self._cancelled     = False
 
     def cancel(self):
@@ -333,7 +336,7 @@ class VideoFileProcessor(QObject):
             _group_thresholds: dict = {}
 
             # Pass 1：預掃描影片，建立自適應速度門檻（支援任何 33 點 pose backend）
-            if self.backend_mode in ('MEDIAPIPE', 'RTMW3D'):
+            if self.enable_speed_anomaly and self.backend_mode in ('MEDIAPIPE', 'RTMW3D'):
                 self.progress_updated.emit(4, 'Pass 1：建立速度分布...')
                 _body_scale_ref, _group_thresholds = _run_pass1(
                     self.video_path, detector, self.frame_interval, fps
@@ -373,10 +376,11 @@ class VideoFileProcessor(QObject):
                                     (L_SHO[1]-R_SHO[1])**2 +
                                     (L_SHO[2]-R_SHO[2])**2
                                 ) ** 0.5
+                            group_thresholds = _group_thresholds if self.enable_speed_anomaly else None
                             joint_anomaly, _anomaly_prev_reliable, joint_anomaly_detail = _compute_anomaly_mask(
                                 landmarks_arr, _anomaly_prev_reliable, body_scale, _anomaly_dt,
                                 frame_idx, self.frame_interval,
-                                group_thresholds=_group_thresholds,
+                                group_thresholds=group_thresholds,
                             )
 
                         rula_left, rula_right = angle_calc(
@@ -537,6 +541,7 @@ class VideoFileProcessor(QObject):
             'analysis_duration_seconds': round(max(0.0, float(analysis_duration_seconds)), 3),
             'backend_mode':     (self.backend_mode or 'MEDIAPIPE').upper(),
             'rula_params':      dict(self.rula_params),
+            'speed_anomaly_enabled': bool(self.enable_speed_anomaly),
             'records':          records,
             'stats': {
                 'max_score':          max(valid_scores)  if valid_scores else None,

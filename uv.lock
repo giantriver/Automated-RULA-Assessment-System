@@ -912,6 +912,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.12.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/6d/20879428577c1e57ecd41b69dc86beabf43db9287ad2e702207f8b48c751/pypdf-6.12.2.tar.gz", hash = "sha256:111669eb6680c04495ae0c113a1476e3bf93a95761d23c7406b591c80a6490b1", size = 6468184, upload-time = "2026-05-26T13:31:26.911Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/44/fee070a16639d9869bb6a7e0f3a1b3946da1d66f32b9260b4d19cb90d7b2/pypdf-6.12.2-py3-none-any.whl", hash = "sha256:67b2699357a1f3f4c945940ea80826349ee507c9e2577724a14b4941982c104d", size = 343865, upload-time = "2026-05-26T13:31:25.068Z" },
+]
+
+[[package]]
 name = "pyqt6"
 version = "6.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1011,6 +1020,8 @@ dependencies = [
     { name = "nvidia-cudnn-cu12" },
     { name = "onnxruntime-gpu" },
     { name = "opencv-python" },
+    { name = "pillow" },
+    { name = "pypdf" },
     { name = "pyqt6" },
     { name = "rtmlib" },
 ]
@@ -1026,6 +1037,8 @@ requires-dist = [
     { name = "nvidia-cudnn-cu12", specifier = ">=9.22.0.52" },
     { name = "onnxruntime-gpu", specifier = ">=1.24.4" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
+    { name = "pillow", specifier = ">=12.1.1" },
+    { name = "pypdf", specifier = ">=6.12.2" },
     { name = "pyqt6", specifier = ">=6.9.1" },
     { name = "rtmlib", specifier = ">=0.0.15" },
 ]

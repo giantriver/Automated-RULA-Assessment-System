@@ -10,7 +10,7 @@ import os
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QLineEdit, QSpinBox, QComboBox,
-    QProgressBar, QFileDialog, QGroupBox, QSizePolicy,
+    QProgressBar, QFileDialog, QGroupBox, QSizePolicy, QCheckBox,
     QDateEdit, QMessageBox, QScrollArea
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDate
@@ -249,6 +249,10 @@ class UploadWindow(QMainWindow):
         self._force_load_b_combo.addItem('', 3)
         sl.addWidget(self._force_load_b_combo, 3, 3)
 
+        self._speed_anomaly_checkbox = QCheckBox()
+        self._speed_anomaly_checkbox.setChecked(True)
+        sl.addWidget(self._speed_anomaly_checkbox, 4, 0, 1, 4)
+
         col.addWidget(self._settings_group)
 
         # Analyze button
@@ -366,6 +370,9 @@ class UploadWindow(QMainWindow):
         self._force_load_b_combo.setItemText(2, t('upload_load_option_2'))
         self._force_load_b_combo.setItemText(3, t('upload_load_option_3'))
 
+        self._speed_anomaly_checkbox.setText(t('upload_speed_anomaly_label'))
+        self._speed_anomaly_checkbox.setToolTip(t('upload_speed_anomaly_tooltip'))
+
         self._analyze_btn.setText(t('upload_analyze_btn'))
         self._cancel_btn.setText(t('upload_cancel_btn'))
         self._status_lbl.setText(t('upload_status_ready'))
@@ -420,6 +427,7 @@ class UploadWindow(QMainWindow):
             frame_interval = self._interval_spin.value(),
             backend_mode   = self._backend_combo.currentData(),
             rula_params    = rula_params,
+            enable_speed_anomaly = self._speed_anomaly_checkbox.isChecked(),
         )
         self._processor.moveToThread(self._proc_thread)
 

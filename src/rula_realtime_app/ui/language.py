@@ -893,6 +893,14 @@ TRANSLATIONS = {
         'en': 'Force/Load B',
         'zh_TW': '負荷 B'
     },
+    'upload_speed_anomaly_label': {
+        'en': 'Enable speed anomaly detection',
+        'zh_TW': '啟用速度異常偵測'
+    },
+    'upload_speed_anomaly_tooltip': {
+        'en': 'When off, only visibility confidence is used to filter joints',
+        'zh_TW': '關閉時僅使用可信度來過濾關節'
+    },
     'upload_load_option_0': {
         'en': '< 4.4 lb (intermittent)',
         'zh_TW': '載重 < 4.4 磅（間歇）'
@@ -976,6 +984,7 @@ TRANSLATIONS = {
     'history_col_max':      {'en': 'Max Score',     'zh_TW': '最高分'},
     'history_col_avg':      {'en': 'Avg Score',     'zh_TW': '平均分'},
     'history_col_backend':  {'en': 'Model',         'zh_TW': '辨識模型'},
+    'history_col_speed_anomaly': {'en': 'Speed Anomaly', 'zh_TW': '速度異常偵測'},
     'history_col_actions':  {'en': 'Actions',       'zh_TW': '操作'},
     'history_view_btn': {
         'en': 'View',
@@ -1085,6 +1094,7 @@ TRANSLATIONS = {
     'result_stat_invalid':  {'en': 'Invalid Frames', 'zh_TW': '無效幀'},
     'result_stat_duration': {'en': 'Duration',       'zh_TW': '影片長度'},
     'result_stat_analysis_duration': {'en': 'Analysis Time', 'zh_TW': '分析時長'},
+    'result_stat_speed_anomaly': {'en': 'Speed Anomaly', 'zh_TW': '速度異常偵測'},
     'result_stat_max':      {'en': 'Max Score',      'zh_TW': '最高分'},
     'result_stat_avg':      {'en': 'Avg Score',      'zh_TW': '平均分'},
     'result_stat_anom':     {'en': 'Anomaly Frames', 'zh_TW': '異常幀數'},
@@ -1163,6 +1173,14 @@ TRANSLATIONS = {
     'result_export_fail_title': {
         'en': 'Export Failed',
         'zh_TW': '匯出失敗'
+    },
+    'common_on': {
+        'en': 'On',
+        'zh_TW': '開'
+    },
+    'common_off': {
+        'en': 'Off',
+        'zh_TW': '關'
     },
 }
 

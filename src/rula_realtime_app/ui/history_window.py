@@ -149,7 +149,7 @@ class HistoryWindow(QMainWindow):
         self._empty_lbl.setVisible(False)
         col.addWidget(self._empty_lbl)
 
-        self._table = QTableWidget(0, 10)
+        self._table = QTableWidget(0, 11)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -191,6 +191,7 @@ class HistoryWindow(QMainWindow):
             t('history_col_max'),
             t('history_col_avg'),
             t('history_col_backend'),
+            t('history_col_speed_anomaly'),
             t('history_col_actions'),
         ]
         self._table.setHorizontalHeaderLabels(cols)
@@ -254,6 +255,10 @@ class HistoryWindow(QMainWindow):
             backend = str(rec.get('backend_mode', '—')).upper()
             self._table.setItem(row_idx, 8, _cell(backend, center))
 
+            speed_enabled = rec.get('speed_anomaly_enabled', True)
+            speed_text = t('common_on') if speed_enabled else t('common_off')
+            self._table.setItem(row_idx, 9, _cell(speed_text, center))
+
             # Action buttons
             btn_widget = QWidget()
             btn_layout = QHBoxLayout(btn_widget)
@@ -284,7 +289,7 @@ class HistoryWindow(QMainWindow):
             del_btn.clicked.connect(lambda _, r=rec: self._on_delete(r))
             btn_layout.addWidget(del_btn)
 
-            self._table.setCellWidget(row_idx, 9, btn_widget)
+            self._table.setCellWidget(row_idx, 10, btn_widget)
             self._table.setRowHeight(row_idx, 46)
 
     # ── Actions ───────────────────────────────────────────────────────────────
