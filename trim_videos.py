@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+import cv2
 
 
 def run(cmd: list[str]) -> None:
@@ -25,7 +28,66 @@ def run(cmd: list[str]) -> None:
         )
 
 
+def trim_one_with_opencv(input_path: Path, duration: int, overwrite: bool) -> None:
+    capture = cv2.VideoCapture(str(input_path))
+    if not capture.isOpened():
+        raise RuntimeError(f"Failed to open video: {input_path}")
+
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0:
+        capture.release()
+        raise RuntimeError(f"Could not determine FPS for: {input_path}")
+
+    frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if frame_width <= 0 or frame_height <= 0:
+        capture.release()
+        raise RuntimeError(f"Could not determine frame size for: {input_path}")
+
+    max_frames = max(1, int(duration * fps))
+
+    if overwrite:
+        with tempfile.NamedTemporaryFile(
+            dir=str(input_path.parent), suffix=input_path.suffix, delete=False
+        ) as tmp:
+            temp_path = Path(tmp.name)
+    else:
+        temp_path = input_path
+
+    writer = cv2.VideoWriter(
+        str(temp_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (frame_width, frame_height),
+    )
+    if not writer.isOpened():
+        capture.release()
+        raise RuntimeError(f"Failed to open output file for writing: {temp_path}")
+
+    frame_count = 0
+    try:
+        while frame_count < max_frames:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            writer.write(frame)
+            frame_count += 1
+    finally:
+        capture.release()
+        writer.release()
+
+    if overwrite:
+        os.replace(temp_path, input_path)
+
+
 def trim_one(input_path: Path, duration: int, remove_audio: bool, overwrite: bool) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        if remove_audio:
+            print("Warning: --remove-audio was requested, but ffmpeg is unavailable. Audio will be kept only if the fallback codec writes it.")
+        trim_one_with_opencv(input_path, duration=duration, overwrite=overwrite)
+        return
+
     if overwrite:
         # Write to a temp file in the same directory, then replace the original.
         with tempfile.NamedTemporaryFile(
@@ -36,7 +98,7 @@ def trim_one(input_path: Path, duration: int, remove_audio: bool, overwrite: boo
         temp_path = input_path
 
     cmd = [
-        "ffmpeg",
+        ffmpeg,
         "-hide_banner",
         "-y",
         "-i",
