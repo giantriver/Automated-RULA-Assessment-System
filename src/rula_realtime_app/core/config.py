@@ -10,10 +10,15 @@ import numpy as np
 # === 姿勢辨識後端選擇 ===
 # - "MEDIAPIPE": MediaPipe
 # - "RTMW3D": RTMW3D
-POSE_BACKEND = "RTMW3D"  # 可選: "MEDIAPIPE", "RTMW3D"
+POSE_BACKEND = "RTMW2D"  # choices: "MEDIAPIPE", "RTMW2D", "RTMW3D"
 
 # 一般網路攝影機索引
 WEBCAM_INDEX = 0
+
+# RULA angle coordinate mode:
+# - "2D": use image pixel coordinates for MediaPipe pose_landmarks and RTMPoseW 2D keypoints.
+# - "3D": use MediaPipe pose_world_landmarks only.
+ANALYSIS_MODE = "2D"
 
 # === 顯示模式選擇 ===
 DISPLAY_MODE = "RULA"  # "RULA": 顯示RULA評估分數; "COORDINATES": 顯示關鍵點坐標
@@ -56,7 +61,6 @@ RTMW3D_CONFIG = {
 
 # RTMW（COCO-WholeBody 133）關鍵點索引（只列出 RULA 需要的點）
 RTMW = {
-    "NOSE": 0,
     "LEFT_EAR": 3,
     "RIGHT_EAR": 4,
     "LEFT_SHOULDER": 5,
@@ -71,10 +75,85 @@ RTMW = {
     "RIGHT_HIP": 12,
 }
 
+# RULA 實際分析/使用的骨架連線（RTMW 原生 COCO-WholeBody 索引）。
+# rtmlib 預設會畫完整 133 點（含臉、雙手 mesh、腳），但其中只有以下這些點會被
+# 映射進 33 點並參與 RULA 角度與異常判定。為了「所見即所判」，繪製時只畫這些連線，
+# 避免畫面出現未被分析的指尖/臉部點造成誤導。
+RTMW_RULA_CONNECTIONS = [
+    (RTMW["LEFT_EAR"],  RTMW["RIGHT_EAR"]),                        # 雙耳
+    (RTMW["LEFT_SHOULDER"],  RTMW["LEFT_EAR"]),
+    (RTMW["RIGHT_SHOULDER"], RTMW["RIGHT_EAR"]),                   # 肩 → 耳
+    (RTMW["LEFT_SHOULDER"],  RTMW["RIGHT_SHOULDER"]),             # 雙肩
+    (RTMW["LEFT_SHOULDER"],  RTMW["LEFT_HIP"]),
+    (RTMW["RIGHT_SHOULDER"], RTMW["RIGHT_HIP"]),
+    (RTMW["LEFT_HIP"],       RTMW["RIGHT_HIP"]),                  # 軀幹
+    (RTMW["LEFT_SHOULDER"],  RTMW["LEFT_ELBOW"]),
+    (RTMW["LEFT_ELBOW"],     RTMW["LEFT_WRIST"]),
+    (RTMW["LEFT_WRIST"],     RTMW["LEFT_MIDDLE_FINGER1"]),        # 左臂 + 左手
+    (RTMW["RIGHT_SHOULDER"], RTMW["RIGHT_ELBOW"]),
+    (RTMW["RIGHT_ELBOW"],    RTMW["RIGHT_WRIST"]),
+    (RTMW["RIGHT_WRIST"],    RTMW["RIGHT_MIDDLE_FINGER1"]),       # 右臂 + 右手
+]
+# 上述連線涉及的所有關鍵點（畫節點用）
+RTMW_RULA_KEYPOINTS = sorted({idx for pair in RTMW_RULA_CONNECTIONS for idx in pair})
+
+# MediaPipe BlazePose 33 點 — 只列出 RULA 角度計算使用的連線（所見即所判）
+MP_RULA_CONNECTIONS: list[tuple[int, int]] = [
+    ( 7,  8),  # 雙耳
+    (11, 12),  # 雙肩
+    (11, 23), (12, 24), (23, 24),  # 軀幹
+    (11, 13), (13, 15),            # 左臂
+    (12, 14), (14, 16),            # 右臂
+    (15, 17), (15, 19),            # 左手（pinky / index）
+    (16, 18), (16, 20),            # 右手
+    (11,  7), (12,  8),            # 肩 → 耳
+]
+MP_RULA_KEYPOINTS: list[int] = sorted({idx for pair in MP_RULA_CONNECTIONS for idx in pair})
+
+# 骨段名稱 → 原生索引對，供骨長異常紅線繪製使用。
+# RTMW 版本用 COCO-WholeBody 原始索引（keypoints_2d_norm）。
+BONE_NAME_TO_RTMW_PAIR: dict[str, tuple[int, int]] = {
+    # 上肢鏈
+    'left_upper_arm':    (RTMW["LEFT_SHOULDER"],  RTMW["LEFT_ELBOW"]),          # (5, 7)
+    'left_lower_arm':    (RTMW["LEFT_ELBOW"],     RTMW["LEFT_WRIST"]),          # (7, 9)
+    'right_upper_arm':   (RTMW["RIGHT_SHOULDER"], RTMW["RIGHT_ELBOW"]),         # (6, 8)
+    'right_lower_arm':   (RTMW["RIGHT_ELBOW"],    RTMW["RIGHT_WRIST"]),         # (8, 10)
+    'left_wrist_index':  (RTMW["LEFT_WRIST"],  RTMW["LEFT_MIDDLE_FINGER1"]),    # (9, 100)
+    'right_wrist_index': (RTMW["RIGHT_WRIST"], RTMW["RIGHT_MIDDLE_FINGER1"]),   # (10, 121)
+    # 軀幹核心
+    'shoulder_width':    (RTMW["LEFT_SHOULDER"],  RTMW["RIGHT_SHOULDER"]),      # (5, 6)
+    'hip_width':         (RTMW["LEFT_HIP"],        RTMW["RIGHT_HIP"]),           # (11, 12)
+    'left_trunk':        (RTMW["LEFT_SHOULDER"],   RTMW["LEFT_HIP"]),            # (5, 11)
+    'right_trunk':       (RTMW["RIGHT_SHOULDER"],  RTMW["RIGHT_HIP"]),           # (6, 12)
+    # 頭頸鏈
+    'left_shoulder_ear':  (RTMW["LEFT_SHOULDER"],  RTMW["LEFT_EAR"]),            # (5, 3)
+    'right_shoulder_ear': (RTMW["RIGHT_SHOULDER"], RTMW["RIGHT_EAR"]),           # (6, 4)
+}
+
+# MediaPipe 版本用 BlazePose 33 點索引（landmarks_2d）。
+BONE_NAME_TO_MP_PAIR: dict[str, tuple[int, int]] = {
+    # 上肢鏈
+    'left_upper_arm':    (11, 13),
+    'left_lower_arm':    (13, 15),
+    'right_upper_arm':   (12, 14),
+    'right_lower_arm':   (14, 16),
+    'left_wrist_index':  (15, 19),
+    'left_wrist_pinky':  (15, 17),
+    'right_wrist_index': (16, 20),
+    'right_wrist_pinky': (16, 18),
+    # 軀幹核心
+    'shoulder_width':    (11, 12),
+    'hip_width':         (23, 24),
+    'left_trunk':        (11, 23),
+    'right_trunk':       (12, 24),
+    # 頭頸鏈
+    'left_shoulder_ear':  (11,  7),
+    'right_shoulder_ear': (12,  8),
+}
+
 # 將 RTMW 索引映射到 MediaPipe Pose 33 索引
 # RULA 核心使用的是 MediaPipe 33 點語意，故 RTMW3D 先轉成相同格式。
 RTMW_TO_MEDIAPIPE = {
-    0: RTMW["NOSE"],
     7: RTMW["LEFT_EAR"],
     8: RTMW["RIGHT_EAR"],
     11: RTMW["LEFT_SHOULDER"],

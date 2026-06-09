@@ -264,6 +264,14 @@ TRANSLATIONS = {
         'en': 'speed_jump',
         'zh_TW': '速度跳躍'
     },
+    'joint_confidence_reason_speed_candidate': {
+        'en': 'speed_candidate',
+        'zh_TW': '速度候選'
+    },
+    'joint_confidence_reason_bone_length_abnormal': {
+        'en': 'bone_length',
+        'zh_TW': '骨長異常'
+    },
     'joint_group_trunk': {
         'en': 'trunk',
         'zh_TW': '軀幹'
@@ -383,13 +391,33 @@ TRANSLATIONS = {
         'en': 'Switch real-time pose estimation backend.',
         'zh_TW': '切換即時姿勢辨識後端。'
     },
+    'config_analysis_mode': {
+        'en': 'Angle Mode:',
+        'zh_TW': '角度模式:'
+    },
+    'config_analysis_mode_desc': {
+        'en': '2D uses pixel coordinates. 3D uses MediaPipe world landmarks only.',
+        'zh_TW': '2D 使用影像 pixel 座標；3D 只使用 MediaPipe world landmarks。'
+    },
+    'config_option_analysis_2d': {
+        'en': '2D Pixel',
+        'zh_TW': '2D Pixel'
+    },
+    'config_option_analysis_3d': {
+        'en': '3D MediaPipe World',
+        'zh_TW': '3D MediaPipe World'
+    },
     'config_option_backend_mediapipe': {
         'en': 'MediaPipe',
         'zh_TW': 'MediaPipe'
     },
+    'config_option_backend_rtmw2d': {
+        'en': 'RTMPoseW 2D',
+        'zh_TW': 'RTMPoseW 2D'
+    },
     'config_option_backend_rtmw3d': {
-        'en': 'RTM Pose (RTMW3D)',
-        'zh_TW': 'RTM Pose（RTMW3D）'
+        'en': 'RTMPoseW 3D (Legacy)',
+        'zh_TW': 'RTMPoseW 3D（舊）'
     },
     'config_wrist_twist': {
         'en': 'Wrist Twist:',
@@ -709,6 +737,10 @@ TRANSLATIONS = {
         'en': 'RTMW3D',
         'zh_TW': 'RTMW3D'
     },
+    'source_rtmw2d_webcam': {
+        'en': 'RTMPoseW 2D',
+        'zh_TW': 'RTMPoseW 2D'
+    },
     'source_video': {
         'en': 'Video File',
         'zh_TW': '影片檔案'
@@ -837,13 +869,45 @@ TRANSLATIONS = {
         'en': 'Detection Backend',
         'zh_TW': '偵測後端'
     },
+    'upload_backend_rtmw2d': {
+        'en': 'RTMPoseW 2D',
+        'zh_TW': 'RTMPoseW 2D'
+    },
     'upload_backend_rtmw3d': {
-        'en': 'RTMW3D (High Accuracy)',
-        'zh_TW': 'RTMW3D（高精度）'
+        'en': 'RTMPoseW 3D (Legacy)',
+        'zh_TW': 'RTMPoseW 3D（舊）'
     },
     'upload_backend_mediapipe': {
         'en': 'MediaPipe (Fast)',
         'zh_TW': 'MediaPipe（快速）'
+    },
+    'upload_mp_complexity_label': {
+        'en': 'MP Model',
+        'zh_TW': 'MP 模型'
+    },
+    'upload_mp_complexity_0': {
+        'en': '0  Fast',
+        'zh_TW': '0  快速'
+    },
+    'upload_mp_complexity_1': {
+        'en': '1  Standard',
+        'zh_TW': '1  標準'
+    },
+    'upload_mp_complexity_2': {
+        'en': '2  Accurate',
+        'zh_TW': '2  精準'
+    },
+    'upload_analysis_mode_label': {
+        'en': 'Angle Mode',
+        'zh_TW': '角度模式'
+    },
+    'upload_analysis_mode_2d': {
+        'en': '2D Pixel',
+        'zh_TW': '2D Pixel'
+    },
+    'upload_analysis_mode_3d': {
+        'en': '3D MediaPipe World',
+        'zh_TW': '3D MediaPipe World'
     },
     'upload_wrist_twist_label': {
         'en': 'Wrist Twist',
@@ -894,12 +958,20 @@ TRANSLATIONS = {
         'zh_TW': '負荷 B'
     },
     'upload_speed_anomaly_label': {
-        'en': 'Enable speed anomaly detection',
-        'zh_TW': '啟用速度異常偵測'
+        'en': 'Show fast-motion hints (triangle)',
+        'zh_TW': '顯示速度異常提示（三角形）'
     },
     'upload_speed_anomaly_tooltip': {
-        'en': 'When off, only visibility confidence is used to filter joints',
-        'zh_TW': '關閉時僅使用可信度來過濾關節'
+        'en': 'Speed is shown as a hint only; it never invalidates joints or affects angles',
+        'zh_TW': '速度僅作為提示，不會讓關節失效或影響角度計算'
+    },
+    'upload_interp_label': {
+        'en': 'Use interpolation (repair short joint drop-outs)',
+        'zh_TW': '使用補點（修復短暫關節遺失）'
+    },
+    'upload_interp_tooltip': {
+        'en': 'Linearly interpolate briefly-invalid joints from neighboring reliable frames (gap <= 1.0s), then recompute RULA',
+        'zh_TW': '對短暫 invalid 的關節以前後可信幀做線性插值（gap <= 1.0 秒），再以補點骨架重算 RULA'
     },
     'upload_load_option_0': {
         'en': '< 4.4 lb (intermittent)',
@@ -949,6 +1021,21 @@ TRANSLATIONS = {
         'en': 'Error during analysis:\n{}',
         'zh_TW': '分析過程發生錯誤：\n{}'
     },
+    'upload_speed_gap_warn_title': {
+        'en': 'Speed Anomaly May Not Work',
+        'zh_TW': '速度異常偵測可能無法作用'
+    },
+    'upload_speed_gap_warn_msg': {
+        'en': ('The current sampling interval (every {interval} frames ≈ {gap:.2f}s) '
+               'exceeds the effective window for speed-anomaly detection ({maxg:.1f}s).\n\n'
+               'With this setting, speed-anomaly detection will not work (joints are '
+               'filtered by visibility only).\n\n'
+               'Consider lowering the sampling interval. Continue anyway?'),
+        'zh_TW': ('目前的取樣間隔（每 {interval} 幀 ≈ {gap:.2f} 秒）超過速度異常偵測的'
+                  '有效範圍（{maxg:.1f} 秒）。\n\n'
+                  '在此設定下，速度異常偵測將無法作用（僅會以可信度過濾關節）。\n\n'
+                  '建議調小「取樣間隔」。是否仍要繼續分析？')
+    },
 
     # ── History window ───────────────────────────────────────────────────────
     'history_window_title': {
@@ -975,17 +1062,18 @@ TRANSLATIONS = {
         'en': 'No records yet\nPlease analyze a video first',
         'zh_TW': '尚無分析記錄\n請先進行影片分析'
     },
-    'history_col_date':     {'en': 'Survey Date',  'zh_TW': '調查日期'},
-    'history_col_assessor': {'en': 'Assessor',      'zh_TW': '評估員'},
-    'history_col_org':      {'en': 'Organization',  'zh_TW': '單位'},
-    'history_col_task':     {'en': 'Task Name',     'zh_TW': '作業名稱'},
-    'history_col_filename': {'en': 'Filename',      'zh_TW': '影片檔名'},
-    'history_col_created':  {'en': 'Upload Time',   'zh_TW': '上傳時間'},
-    'history_col_max':      {'en': 'Max Score',     'zh_TW': '最高分'},
-    'history_col_avg':      {'en': 'Avg Score',     'zh_TW': '平均分'},
-    'history_col_backend':  {'en': 'Model',         'zh_TW': '辨識模型'},
-    'history_col_speed_anomaly': {'en': 'Speed Anomaly', 'zh_TW': '速度異常偵測'},
-    'history_col_actions':  {'en': 'Actions',       'zh_TW': '操作'},
+    'history_col_date':          {'en': 'Survey Date',    'zh_TW': '調查日期'},
+    'history_col_assessor':      {'en': 'Assessor',        'zh_TW': '評估員'},
+    'history_col_org':           {'en': 'Organization',    'zh_TW': '單位'},
+    'history_col_task':          {'en': 'Task Name',       'zh_TW': '作業名稱'},
+    'history_col_filename':      {'en': 'Filename',        'zh_TW': '影片檔名'},
+    'history_col_created':       {'en': 'Upload Time',     'zh_TW': '上傳時間'},
+    'history_col_max':           {'en': 'Max',             'zh_TW': '最高分'},
+    'history_col_avg':           {'en': 'Avg',             'zh_TW': '平均分'},
+    'history_col_backend':       {'en': 'Model',           'zh_TW': '辨識模型'},
+    'history_col_analysis_mode': {'en': 'Mode',            'zh_TW': '角度模式'},
+    'history_col_speed_anomaly': {'en': 'Speed Hint',   'zh_TW': '速度提示'},
+    'history_col_actions':       {'en': 'Actions',         'zh_TW': '操作'},
     'history_view_btn': {
         'en': 'View',
         'zh_TW': '查看'
@@ -1025,6 +1113,18 @@ TRANSLATIONS = {
     'history_delete_fail_title': {
         'en': 'Delete Failed',
         'zh_TW': '刪除失敗'
+    },
+    'history_batch_delete_btn': {
+        'en': 'Batch Delete',
+        'zh_TW': '批量刪除'
+    },
+    'history_batch_delete_confirm_title': {
+        'en': 'Confirm Batch Delete',
+        'zh_TW': '確認批量刪除'
+    },
+    'history_batch_delete_confirm_msg': {
+        'en': 'Permanently delete {count} selected records? This cannot be undone.',
+        'zh_TW': '確定要永久刪除選取的 {count} 筆記錄？此操作無法復原。'
     },
 
     # ── Result window ────────────────────────────────────────────────────────
@@ -1094,13 +1194,30 @@ TRANSLATIONS = {
     'result_stat_invalid':  {'en': 'Invalid Frames', 'zh_TW': '無效幀'},
     'result_stat_duration': {'en': 'Duration',       'zh_TW': '影片長度'},
     'result_stat_analysis_duration': {'en': 'Analysis Time', 'zh_TW': '分析時長'},
-    'result_stat_speed_anomaly': {'en': 'Speed Anomaly', 'zh_TW': '速度異常偵測'},
+    'result_stat_speed_anomaly': {'en': 'Speed Hint', 'zh_TW': '速度提示'},
     'result_stat_max':      {'en': 'Max Score',      'zh_TW': '最高分'},
     'result_stat_avg':      {'en': 'Avg Score',      'zh_TW': '平均分'},
     'result_stat_anom':     {'en': 'Anomaly Frames', 'zh_TW': '異常幀數'},
+    'result_stat_interp_count': {'en': 'Interp Points', 'zh_TW': '補點總數'},
+    'result_stat_interp_rate':  {'en': 'Interp Rate',   'zh_TW': '補點率'},
+    'result_stat_orig_avg':     {'en': 'Orig Avg',      'zh_TW': '原始平均'},
+    'result_stat_interp_avg':   {'en': 'Interp Avg',    'zh_TW': '補點平均'},
+    'result_stat_interp_delta': {'en': 'Δ Avg',         'zh_TW': 'Δ 平均'},
+    'result_interp_checkbox':   {'en': 'Show interpolated joints', 'zh_TW': '顯示補點'},
+    'frame_metrics_before_interp': {'en': 'Before', 'zh_TW': '補點前'},
+    'frame_metrics_after_interp':  {'en': 'After',  'zh_TW': '補點後'},
+    'result_interp_summary_title': {'en': 'Interpolation Summary', 'zh_TW': '補點明細'},
     'result_chart_title': {
         'en': 'RULA Score Trend  (click to jump)',
         'zh_TW': 'RULA 分數趨勢  （點擊跳幀）'
+    },
+    'result_chart_legend_orig': {
+        'en': 'Original',
+        'zh_TW': '原始'
+    },
+    'result_chart_legend_interp': {
+        'en': 'Interpolated',
+        'zh_TW': '補點後'
     },
     'result_chart_x': {
         'en': 'Time (sec)',

@@ -7,6 +7,8 @@
 
 import os
 
+import cv2
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QLineEdit, QSpinBox, QComboBox,
@@ -16,7 +18,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDate
 from PyQt6.QtGui import QPixmap, QImage, QFont
 
-from ..core.video_file_processor import VideoFileProcessor, save_analysis
+from ..core.video_file_processor import (
+    VideoFileProcessor, save_analysis, _ANOM_MAX_GAP_SECONDS,
+)
 from .styles import (
     UPLOAD_BG_STYLE, CONTENT_CARD_STYLE, HEADER_CARD_STYLE,
     BACK_BTN_STYLE, EMERALD_BTN_STYLE, BLUE_BTN_STYLE, RED_BTN_STYLE,
@@ -198,60 +202,89 @@ class UploadWindow(QMainWindow):
         self._backend_label = QLabel()
         sl.addWidget(self._backend_label, 0, 2)
         self._backend_combo = QComboBox()
-        self._backend_combo.addItem('', 'RTMW3D')
+        self._backend_combo.addItem('', 'RTMW2D')
         self._backend_combo.addItem('', 'MEDIAPIPE')
+        self._backend_combo.currentIndexChanged.connect(self._sync_mp_complexity_visibility)
         sl.addWidget(self._backend_combo, 0, 3)
 
+        self._analysis_mode_label = QLabel()
+        sl.addWidget(self._analysis_mode_label, 1, 0)
+        self._analysis_mode_combo = QComboBox()
+        self._analysis_mode_combo.addItem('', '2D')
+        self._analysis_mode_combo.addItem('', '3D')
+        self._analysis_mode_combo.currentIndexChanged.connect(self._sync_backend_for_analysis_mode)
+        sl.addWidget(self._analysis_mode_combo, 1, 1)
+
+        self._mp_complexity_label = QLabel()
+        sl.addWidget(self._mp_complexity_label, 1, 2)
+        self._mp_complexity_combo = QComboBox()
+        self._mp_complexity_combo.addItem('', 0)
+        self._mp_complexity_combo.addItem('', 1)
+        self._mp_complexity_combo.addItem('', 2)
+        self._mp_complexity_combo.setCurrentIndex(1)  # default: 1 Standard
+        sl.addWidget(self._mp_complexity_combo, 1, 3)
+        self._sync_mp_complexity_visibility()
+
         self._wrist_twist_label = QLabel()
-        sl.addWidget(self._wrist_twist_label, 1, 0)
+        sl.addWidget(self._wrist_twist_label, 2, 0)
         self._wrist_twist_combo = QComboBox()
         self._wrist_twist_combo.addItem('', 1)
         self._wrist_twist_combo.addItem('', 2)
-        sl.addWidget(self._wrist_twist_combo, 1, 1)
+        sl.addWidget(self._wrist_twist_combo, 2, 1)
 
         self._legs_label = QLabel()
-        sl.addWidget(self._legs_label, 1, 2)
+        sl.addWidget(self._legs_label, 2, 2)
         self._legs_combo = QComboBox()
         self._legs_combo.addItem('', 1)
         self._legs_combo.addItem('', 2)
         self._legs_combo.setCurrentIndex(1)
-        sl.addWidget(self._legs_combo, 1, 3)
+        sl.addWidget(self._legs_combo, 2, 3)
 
         self._muscle_use_a_label = QLabel()
-        sl.addWidget(self._muscle_use_a_label, 2, 0)
+        sl.addWidget(self._muscle_use_a_label, 3, 0)
         self._muscle_use_a_combo = QComboBox()
         self._muscle_use_a_combo.addItem('', 0)
         self._muscle_use_a_combo.addItem('', 1)
-        sl.addWidget(self._muscle_use_a_combo, 2, 1)
+        sl.addWidget(self._muscle_use_a_combo, 3, 1)
 
         self._muscle_use_b_label = QLabel()
-        sl.addWidget(self._muscle_use_b_label, 2, 2)
+        sl.addWidget(self._muscle_use_b_label, 3, 2)
         self._muscle_use_b_combo = QComboBox()
         self._muscle_use_b_combo.addItem('', 0)
         self._muscle_use_b_combo.addItem('', 1)
-        sl.addWidget(self._muscle_use_b_combo, 2, 3)
+        sl.addWidget(self._muscle_use_b_combo, 3, 3)
 
         self._force_load_a_label = QLabel()
-        sl.addWidget(self._force_load_a_label, 3, 0)
+        sl.addWidget(self._force_load_a_label, 4, 0)
         self._force_load_a_combo = QComboBox()
         self._force_load_a_combo.addItem('', 0)
         self._force_load_a_combo.addItem('', 1)
         self._force_load_a_combo.addItem('', 2)
         self._force_load_a_combo.addItem('', 3)
-        sl.addWidget(self._force_load_a_combo, 3, 1)
+        sl.addWidget(self._force_load_a_combo, 4, 1)
 
         self._force_load_b_label = QLabel()
-        sl.addWidget(self._force_load_b_label, 3, 2)
+        sl.addWidget(self._force_load_b_label, 4, 2)
         self._force_load_b_combo = QComboBox()
         self._force_load_b_combo.addItem('', 0)
         self._force_load_b_combo.addItem('', 1)
         self._force_load_b_combo.addItem('', 2)
         self._force_load_b_combo.addItem('', 3)
-        sl.addWidget(self._force_load_b_combo, 3, 3)
+        sl.addWidget(self._force_load_b_combo, 4, 3)
 
         self._speed_anomaly_checkbox = QCheckBox()
         self._speed_anomaly_checkbox.setChecked(True)
-        sl.addWidget(self._speed_anomaly_checkbox, 4, 0, 1, 4)
+        self._speed_anomaly_checkbox.setTristate(False)
+        self._speed_anomaly_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._speed_anomaly_checkbox.setMinimumHeight(30)
+        sl.addWidget(self._speed_anomaly_checkbox, 5, 0, 1, 4)
+
+        self._interp_checkbox = QCheckBox()
+        self._interp_checkbox.setChecked(False)
+        self._interp_checkbox.setTristate(False)
+        self._interp_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._interp_checkbox.setMinimumHeight(30)
+        sl.addWidget(self._interp_checkbox, 6, 0, 1, 4)
 
         col.addWidget(self._settings_group)
 
@@ -340,8 +373,16 @@ class UploadWindow(QMainWindow):
         self._interval_label.setText(t('upload_interval_label'))
         self._interval_spin.setToolTip(t('upload_interval_tooltip'))
         self._backend_label.setText(t('upload_backend_label'))
-        self._backend_combo.setItemText(0, t('upload_backend_rtmw3d'))
+        self._backend_combo.setItemText(0, t('upload_backend_rtmw2d'))
         self._backend_combo.setItemText(1, t('upload_backend_mediapipe'))
+        self._mp_complexity_label.setText(t('upload_mp_complexity_label'))
+        self._mp_complexity_combo.setItemText(0, t('upload_mp_complexity_0'))
+        self._mp_complexity_combo.setItemText(1, t('upload_mp_complexity_1'))
+        self._mp_complexity_combo.setItemText(2, t('upload_mp_complexity_2'))
+
+        self._analysis_mode_label.setText(t('upload_analysis_mode_label'))
+        self._analysis_mode_combo.setItemText(0, t('upload_analysis_mode_2d'))
+        self._analysis_mode_combo.setItemText(1, t('upload_analysis_mode_3d'))
         self._wrist_twist_label.setText(t('upload_wrist_twist_label'))
         self._wrist_twist_combo.setItemText(0, t('upload_wrist_twist_option_neutral'))
         self._wrist_twist_combo.setItemText(1, t('upload_wrist_twist_option_twisted'))
@@ -373,6 +414,9 @@ class UploadWindow(QMainWindow):
         self._speed_anomaly_checkbox.setText(t('upload_speed_anomaly_label'))
         self._speed_anomaly_checkbox.setToolTip(t('upload_speed_anomaly_tooltip'))
 
+        self._interp_checkbox.setText(t('upload_interp_label'))
+        self._interp_checkbox.setToolTip(t('upload_interp_tooltip'))
+
         self._analyze_btn.setText(t('upload_analyze_btn'))
         self._cancel_btn.setText(t('upload_cancel_btn'))
         self._status_lbl.setText(t('upload_status_ready'))
@@ -388,10 +432,65 @@ class UploadWindow(QMainWindow):
             self._file_label.setText(os.path.basename(path))
             self._file_label.setStyleSheet('color: #0f172a; font-size: 13px;')
 
+    def _sync_backend_for_analysis_mode(self):
+        if not hasattr(self, '_analysis_mode_combo') or not hasattr(self, '_backend_combo'):
+            return
+        is_3d = self._analysis_mode_combo.currentData() == '3D'
+        if is_3d:
+            idx = self._backend_combo.findData('MEDIAPIPE')
+            if idx >= 0:
+                self._backend_combo.setCurrentIndex(idx)
+        self._backend_combo.setEnabled(not is_3d)
+
+    def _sync_mp_complexity_visibility(self):
+        if not hasattr(self, '_mp_complexity_combo'):
+            return
+        is_mp = self._backend_combo.currentData() == 'MEDIAPIPE'
+        self._mp_complexity_label.setVisible(is_mp)
+        self._mp_complexity_combo.setVisible(is_mp)
+
+    def _confirm_speed_anomaly_window(self) -> bool:
+        """取樣間隔 / fps 超過速度異常的有效觀測窗時，提醒使用者。
+
+        Returns:
+            True  → 可繼續分析（無需警告，或使用者選擇繼續）
+            False → 使用者選擇取消
+        """
+        if not self._speed_anomaly_checkbox.isChecked() or not self._video_path:
+            return True
+
+        fps = 0.0
+        cap = cv2.VideoCapture(self._video_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        cap.release()
+        if fps <= 1e-6:
+            return True  # 取不到 fps 就不阻擋
+
+        interval = self._interval_spin.value()
+        sample_gap = interval / fps
+        if sample_gap <= _ANOM_MAX_GAP_SECONDS:
+            return True
+
+        reply = QMessageBox.warning(
+            self,
+            t('upload_speed_gap_warn_title'),
+            t('upload_speed_gap_warn_msg').format(
+                interval=interval, gap=sample_gap, maxg=_ANOM_MAX_GAP_SECONDS,
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     # ── Start / cancel analysis ───────────────────────────────────────────────
     def _start_analysis(self):
         if not self._video_path:
             QMessageBox.warning(self, t('upload_no_file_title'), t('upload_no_file_msg'))
+            return
+
+        # 取樣間隔過大時，速度異常偵測會靜默失效 → 先提醒使用者
+        if not self._confirm_speed_anomaly_window():
             return
 
         # Reuse one processing slot at a time. If a previous analysis is still
@@ -421,13 +520,21 @@ class UploadWindow(QMainWindow):
         self._status_lbl.setText(t('upload_status_init'))
 
         self._proc_thread = QThread()
+        analysis_mode = self._analysis_mode_combo.currentData() or '2D'
+        backend_mode = self._backend_combo.currentData()
+        if analysis_mode == '3D':
+            backend_mode = 'MEDIAPIPE'
+
         self._processor   = VideoFileProcessor(
             video_path     = self._video_path,
             meta           = meta,
             frame_interval = self._interval_spin.value(),
-            backend_mode   = self._backend_combo.currentData(),
+            backend_mode   = backend_mode,
+            analysis_mode  = analysis_mode,
             rula_params    = rula_params,
-            enable_speed_anomaly = self._speed_anomaly_checkbox.isChecked(),
+            enable_speed_anomaly  = self._speed_anomaly_checkbox.isChecked(),
+            mp_model_complexity   = int(self._mp_complexity_combo.currentData() or 1),
+            use_interpolation     = self._interp_checkbox.isChecked(),
         )
         self._processor.moveToThread(self._proc_thread)
 

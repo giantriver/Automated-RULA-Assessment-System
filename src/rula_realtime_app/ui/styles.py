@@ -441,6 +441,33 @@ CONTENT_CARD_STYLE = """
         padding: 2px 8px;
         color: #059669;
     }
+    /* Improve visibility of checkboxes (larger indicator, stronger contrast) */
+    QCheckBox {
+        color: #0f172a;
+        font-size: 14px;
+        spacing: 8px;
+    }
+    QCheckBox::indicator {
+        width: 18px;
+        height: 18px;
+        border: 2px solid #94a3b8;
+        border-radius: 4px;
+        background: transparent;
+    }
+    /* Explicit unchecked state: no image */
+    QCheckBox::indicator:unchecked {
+        image: none;
+        background-color: transparent;
+        border: 2px solid #94a3b8;
+    }
+    QCheckBox::indicator:checked {
+        image: none;
+        background-color: #10b981;
+        border: 2px solid #10b981;
+    }
+    QCheckBox::indicator:hover {
+        border: 2px solid #059669;
+    }
     QTableWidget {
         background-color: white;
         color: #0f172a;

@@ -43,11 +43,16 @@ class MainWindow(QMainWindow):
         
         # 從 config 動態讀取姿勢辨識後端
         self.pose_backend = core_config.POSE_BACKEND
+        self.analysis_mode = getattr(core_config, 'ANALYSIS_MODE', '2D')
+        if self.analysis_mode == '3D':
+            self.pose_backend = 'MEDIAPIPE'
+            core_config.POSE_BACKEND = 'MEDIAPIPE'
         
         # 根據配置設定視窗標題
         self.source_type_key = {
             "MEDIAPIPE": "source_mediapipe",
-            "RTMW3D": "source_rtmw3d_webcam"
+            "RTMW2D": "source_rtmw2d_webcam",
+            "RTMW3D": "source_rtmw3d_webcam",
         }.get(self.pose_backend, "source_mediapipe")
         
         self.update_window_title()
@@ -58,9 +63,9 @@ class MainWindow(QMainWindow):
         self._frame_proc_worker = None
         self._frame_proc_thread = None
         self.is_detection_active = False
-        # RTMW3D: 延遲到 worker 執行緒才初始化（ONNX 模型載入很慢，不能阻塞主執行緒）
+        # RTMPoseW: 延遲到 worker 執行緒才初始化（ONNX 模型載入很慢，不能阻塞主執行緒）
         # MEDIAPIPE: 直接初始化（速度快，~100ms）
-        if self.pose_backend == "RTMW3D":
+        if self.pose_backend in ("RTMW2D", "RTMW3D"):
             self.pose_detector = None  # 由 RealtimeProcessorWorker 在背景執行緒建立
         else:
             self.pose_detector = PoseDetector(backend_mode='MEDIAPIPE')
@@ -285,7 +290,7 @@ class MainWindow(QMainWindow):
         
     def start_detection(self):
         """開始辨識"""
-        if self.pose_backend == "RTMW3D":
+        if self.pose_backend in ("RTMW2D", "RTMW3D"):
             # 使用一般攝像頭 + RTMW3D
             self.is_detection_active = True
             self.camera_handler = CameraHandler(camera_index=core_config.WEBCAM_INDEX)
@@ -326,7 +331,7 @@ class MainWindow(QMainWindow):
         # RTMW3D 傳 backend_mode 字串，讓 worker 在自己的執行緒延遲初始化
         # 其他模式傳已建立好的 PoseDetector
         detector_arg = (
-            'RTMW3D' if self.pose_backend == 'RTMW3D' else self.pose_detector
+            self.pose_backend if self.pose_backend in ('RTMW2D', 'RTMW3D') else self.pose_detector
         )
 
         self._frame_proc_thread = QThread()
@@ -334,6 +339,7 @@ class MainWindow(QMainWindow):
             detector_arg,
             self.display_mode,
             self.rula_calc_every_n_frames,
+            analysis_mode=self.analysis_mode,
         )
         self._frame_proc_worker.moveToThread(self._frame_proc_thread)
 
@@ -525,7 +531,7 @@ class MainWindow(QMainWindow):
                 )
             else:
                 # COORDINATES 模式：只保存圖片和坐標文本
-                landmarks = self.pose_detector.get_landmarks_array() if self.pose_detector else None
+                landmarks = self.pose_detector.get_rula_landmarks(self.analysis_mode) if self.pose_detector else None
                 success, message = SnapshotManager.save_coordinates_snapshot(
                     self.current_frame, landmarks, self
                 )
@@ -595,18 +601,45 @@ class MainWindow(QMainWindow):
     
     def show_config_dialog(self):
         """顯示參數設定對話框"""
-        dialog = RULAConfigDialog(self, current_backend_mode=self.get_pose_backend_mode())
+        dialog = RULAConfigDialog(
+            self,
+            current_backend_mode=self.get_pose_backend_mode(),
+            current_analysis_mode=self.analysis_mode,
+        )
         if dialog.exec():
+            self.apply_analysis_mode(dialog.get_selected_analysis_mode())
             self.apply_pose_backend_mode(dialog.get_selected_backend_mode())
 
     def get_pose_backend_mode(self):
         """取得目前即時分析使用的姿勢偵測後端。"""
-        return 'RTMW3D' if self.pose_backend == 'RTMW3D' else 'MEDIAPIPE'
+        return 'RTMW2D' if self.pose_backend == 'RTMW2D' else 'MEDIAPIPE'
+
+    def apply_analysis_mode(self, analysis_mode):
+        target_mode = str(analysis_mode or '2D').upper()
+        if target_mode not in ('2D', '3D'):
+            target_mode = '2D'
+        if self.analysis_mode == target_mode:
+            return
+
+        is_detecting = self.camera_handler is not None
+        if is_detecting:
+            self.stop_detection()
+
+        self.analysis_mode = target_mode
+        core_config.ANALYSIS_MODE = target_mode
+
+        if target_mode == '3D' and self.pose_backend != 'MEDIAPIPE':
+            self.apply_pose_backend_mode('MEDIAPIPE')
+
+        if is_detecting:
+            self.start_detection()
 
     def apply_pose_backend_mode(self, backend_mode):
         """套用姿勢偵測後端，必要時即時重啟偵測流程。"""
         target_backend = (backend_mode or 'MEDIAPIPE').upper()
-        target_pose_backend = 'RTMW3D' if target_backend == 'RTMW3D' else 'MEDIAPIPE'
+        if self.analysis_mode == '3D':
+            target_backend = 'MEDIAPIPE'
+        target_pose_backend = 'RTMW2D' if target_backend == 'RTMW2D' else 'MEDIAPIPE'
 
         if self.pose_backend == target_pose_backend:
             return
@@ -630,11 +663,12 @@ class MainWindow(QMainWindow):
 
         self.source_type_key = {
             "MEDIAPIPE": "source_mediapipe",
-            "RTMW3D": "source_rtmw3d_webcam"
+            "RTMW2D": "source_rtmw2d_webcam",
+            "RTMW3D": "source_rtmw3d_webcam",
         }.get(self.pose_backend, "source_mediapipe")
         self.update_window_title()
 
-        if self.pose_backend != 'RTMW3D':
+        if self.pose_backend not in ('RTMW2D', 'RTMW3D'):
             self.pose_detector = PoseDetector(backend_mode='MEDIAPIPE')
 
         if is_detecting:

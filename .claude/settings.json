@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile src/rula_realtime_app/core/video_file_processor.py)",
+      "Bash(python -m py_compile src/rula_realtime_app/core/video_file_processor.py src/rula_realtime_app/ui/dialogs.py src/rula_realtime_app/ui/language.py)",
+      "Bash(rm -f /tmp/test_anom.py)",
+      "Bash(ls demo_videos/ && ls ~/.rula_analyses/ | head -20)",
+      "Read(//c/Users/jerry/.rula_analyses/**)",
+      "Bash(python -)",
+      "Bash(python -m py_compile src/rula_realtime_app/ui/result_window.py src/rula_realtime_app/ui/dialogs.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'd:\\\\projects\\\\RULA_RTMPose\\\\src\\\\rula_realtime_app\\\\core\\\\config.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
+  }
+}

@@ -13,8 +13,85 @@ from .config import (
     MEDIAPIPE_CONFIG,
     RTMW3D_CONFIG,
     RTMW_TO_MEDIAPIPE,
+    RTMW_RULA_CONNECTIONS,
+    RTMW_RULA_KEYPOINTS,
+    MP_RULA_CONNECTIONS,
+    MP_RULA_KEYPOINTS,
     convert_indexed_keypoints_to_pose33,
 )
+
+
+def draw_rula_skeleton(image_rgb, kpts_px, scores, kpt_thr: float = 0.3,
+                       line_color=(0, 220, 120), joint_color=(0, 160, 255)):
+    """
+    只繪製 RULA 實際分析/使用的 RTMW 關鍵點與連線（見 RTMW_RULA_CONNECTIONS）。
+
+    取代 rtmlib 預設的全身 133 點繪製，使「畫出來的骨架」= 「被分析的骨架」，
+    避免未被異常判定涵蓋的指尖/臉部點誤導使用者。就地繪製於傳入的 RGB 影像。
+
+    線段門檻（_ANOM_VIS_TH=0.5）比節點門檻（kpt_thr）更嚴格：
+    兩端節點都 >= 0.5 才畫線，避免低可信度誤偵測點拉出奇怪的骨架線。
+    節點圓點仍以較低的 kpt_thr 繪製（方便與 X 標記對位）。
+
+    Args:
+        image_rgb: RGB 影像（numpy array），就地繪製。
+        kpts_px:   RTMW 原生關鍵點像素座標，[K, 2]。
+        scores:    每點信心度，[K]；低於 kpt_thr 的點不畫節點，低於 0.5 的點不畫連線。
+    """
+    if kpts_px is None:
+        return image_rgb
+    n = len(kpts_px)
+    from .video_file_processor import _ANOM_VIS_TH
+
+    def _score(i: int) -> float:
+        if i < 0 or i >= n:
+            return 0.0
+        return float(scores[i]) if scores is not None and i < len(scores) else 1.0
+
+    for a, b in RTMW_RULA_CONNECTIONS:
+        # 只有兩端信心度都達到異常判定門檻，才畫連線（避免誤偵測點拉出奇怪的骨架線）
+        if _score(a) >= _ANOM_VIS_TH and _score(b) >= _ANOM_VIS_TH:
+            pa = (int(kpts_px[a][0]), int(kpts_px[a][1]))
+            pb = (int(kpts_px[b][0]), int(kpts_px[b][1]))
+            cv2.line(image_rgb, pa, pb, line_color, 2, cv2.LINE_AA)
+    for i in RTMW_RULA_KEYPOINTS:
+        if _score(i) >= kpt_thr:
+            cv2.circle(image_rgb, (int(kpts_px[i][0]), int(kpts_px[i][1])),
+                       4, joint_color, -1, cv2.LINE_AA)
+    return image_rgb
+
+
+def draw_rula_skeleton_mp(image_rgb: np.ndarray,
+                          lms_2d: list,
+                          kpt_thr: float = 0.3,
+                          vis_thr: float = 0.5,
+                          line_color=(0, 220, 120),
+                          joint_color=(0, 160, 255)) -> np.ndarray:
+    """
+    只繪製 RULA 相關的 MediaPipe 關鍵點與連線（所見即所判）。
+    lms_2d: list of [x_norm, y_norm, visibility]，至少 25 個元素（需涵蓋 index 24）。
+    """
+    if not lms_2d or len(lms_2d) < 25:
+        return image_rgb
+    h, w = image_rgb.shape[:2]
+
+    def _px(i):
+        lm = lms_2d[i]
+        return (int(lm[0] * w), int(lm[1] * h))
+
+    def _vis(i):
+        if i >= len(lms_2d):
+            return 0.0
+        lm = lms_2d[i]
+        return float(lm[2]) if len(lm) >= 3 else 1.0
+
+    for a, b in MP_RULA_CONNECTIONS:
+        if _vis(a) >= vis_thr and _vis(b) >= vis_thr:
+            cv2.line(image_rgb, _px(a), _px(b), line_color, 2, cv2.LINE_AA)
+    for i in MP_RULA_KEYPOINTS:
+        if _vis(i) >= kpt_thr:
+            cv2.circle(image_rgb, _px(i), 4, joint_color, -1, cv2.LINE_AA)
+    return image_rgb
 
 
 def _bbox_from_keypoints_2d(kpts_2d: np.ndarray) -> np.ndarray:
@@ -84,9 +161,12 @@ def _select_single_target(keypoints_2d, scores, last_target_bbox, iou_thr=0.05):
 class PoseDetector:
     """骨架辨識器：支援 MediaPipe 與 RTMW3D。"""
 
-    def __init__(self, backend_mode='MEDIAPIPE'):
+    def __init__(self, backend_mode='MEDIAPIPE', mp_model_complexity: int | None = None):
         """初始化骨架辨識器。"""
         self.backend_mode = backend_mode.upper()
+        self._mp_model_complexity = mp_model_complexity
+        if self.backend_mode in ('RTMPOSEW2D', 'RTMW'):
+            self.backend_mode = 'RTMW2D'
 
         self.results = None
         self.last_pose33 = None
@@ -99,7 +179,7 @@ class PoseDetector:
         self.pose_tracker = None
         self.draw_skeleton = None
 
-        if self.backend_mode == 'RTMW3D':
+        if self.backend_mode in ('RTMW2D', 'RTMW3D'):
             self._init_rtmw3d()
         else:
             self._init_mediapipe()
@@ -114,9 +194,12 @@ class PoseDetector:
         self.mp_drawing = mp_drawing
         self.mp_drawing_styles = mp_drawing_styles
 
+        complexity = self._mp_model_complexity
+        if complexity is None:
+            complexity = MEDIAPIPE_CONFIG['model_complexity']
         self.pose = mp_pose.Pose(
             static_image_mode=MEDIAPIPE_CONFIG['static_image_mode'],
-            model_complexity=MEDIAPIPE_CONFIG['model_complexity'],
+            model_complexity=int(complexity),
             smooth_landmarks=MEDIAPIPE_CONFIG['smooth_landmarks'],
             enable_segmentation=MEDIAPIPE_CONFIG['enable_segmentation'],
             smooth_segmentation=MEDIAPIPE_CONFIG['smooth_segmentation'],
@@ -126,7 +209,7 @@ class PoseDetector:
 
     def _init_rtmw3d(self):
         """初始化 RTMW3D PoseTracker。"""
-        from rtmlib import Wholebody3d, draw_skeleton
+        from rtmlib import Wholebody, Wholebody3d, draw_skeleton
         from rtmlib.tools.solution.pose_tracker import (
             PoseTracker as RTMLibPoseTracker,
             pose_to_bbox,
@@ -224,9 +307,11 @@ class PoseDetector:
         if tracker_device == 'auto':
             tracker_device = 'cuda'
 
+        pose_model = Wholebody3d if self.backend_mode == 'RTMW3D' else Wholebody
+
         try:
             self.pose_tracker = PatchedPoseTracker(
-                Wholebody3d,
+                pose_model,
                 det_frequency=RTMW3D_CONFIG.get('det_frequency', 1),
                 tracking=RTMW3D_CONFIG.get('tracking', True),
                 backend=RTMW3D_CONFIG.get('backend', 'onnxruntime'),
@@ -234,7 +319,7 @@ class PoseDetector:
             )
         except Exception:
             self.pose_tracker = PatchedPoseTracker(
-                Wholebody3d,
+                pose_model,
                 det_frequency=RTMW3D_CONFIG.get('det_frequency', 1),
                 tracking=RTMW3D_CONFIG.get('tracking', True),
                 backend=RTMW3D_CONFIG.get('backend', 'onnxruntime'),
@@ -254,7 +339,7 @@ class PoseDetector:
         h, w = frame.shape[:2]
         self._last_image_wh = (w, h)
 
-        if self.backend_mode == 'RTMW3D':
+        if self.backend_mode in ('RTMW2D', 'RTMW3D'):
             return self._process_rtmw3d(frame)
 
         self.results = self.pose.process(frame)
@@ -329,7 +414,15 @@ class PoseDetector:
         self.last_keypoints_2d = np.asarray(keypoints_2d)
         self.last_scores = np.asarray(scores)
         # Store raw 3D for full-body rendering (all K keypoints, not just 33 mapped ones)
-        self.last_raw_3d = selected_3d  # None if model returned no 3D
+        if (
+            self.backend_mode == 'RTMW3D'
+            and selected_3d is not None
+            and selected_3d.ndim == 2
+            and selected_3d.shape[1] >= 3
+        ):
+            self.last_raw_3d = selected_3d
+        else:
+            self.last_raw_3d = None
         return True
 
     def get_native_draw_data_2d(self):
@@ -350,7 +443,7 @@ class PoseDetector:
                         'landmarks_2d': [[x_norm, y_norm, visibility], ...]
                     }
         """
-        if self.backend_mode == 'RTMW3D':
+        if self.backend_mode in ('RTMW2D', 'RTMW3D'):
             if self.last_keypoints_2d is None or self.last_scores is None:
                 return None
 
@@ -381,7 +474,7 @@ class PoseDetector:
                     raw_3d.append([float(r3d[i, 0]), float(r3d[i, 1]), float(r3d[i, 2])])
 
             return {
-                'backend': 'RTMW3D',
+                'backend': self.backend_mode,
                 'keypoints_2d_norm': kpts_norm,
                 'scores': scores,
                 'keypoints_3d_raw': raw_3d,  # full raw 3D from model (len == K)
@@ -400,8 +493,19 @@ class PoseDetector:
 
     def get_landmarks_array(self):
         """取得關鍵點陣列（用於 RULA 計算）。"""
-        if self.backend_mode == 'RTMW3D':
-            return self.last_pose33
+        return self.get_rula_landmarks('3D')
+
+    def get_rula_landmarks(self, analysis_mode='2D'):
+        """Return MediaPipe-like 33 landmarks for RULA angle calculation."""
+        mode = str(analysis_mode or '2D').upper()
+
+        if self.backend_mode in ('RTMW2D', 'RTMW3D'):
+            if mode == '3D':
+                return None
+            return self._get_rtmw_pose33_2d_pixels()
+
+        if mode == '2D':
+            return self._get_mediapipe_pose33_2d_pixels()
 
         if self.results is None or self.results.pose_world_landmarks is None:
             return None
@@ -411,6 +515,46 @@ class PoseDetector:
             landmarks.append([lm.x, lm.y, lm.z, lm.visibility])
 
         return landmarks
+
+    def _get_mediapipe_pose33_2d_pixels(self):
+        if self.results is None or self.results.pose_landmarks is None:
+            return None
+
+        w, h = getattr(self, '_last_image_wh', (1, 1))
+        if w <= 0 or h <= 0:
+            return None
+
+        landmarks = []
+        for lm in self.results.pose_landmarks.landmark:
+            landmarks.append([
+                float(lm.x) * float(w),
+                float(lm.y) * float(h),
+                0.0,
+                float(lm.visibility),
+            ])
+        return landmarks
+
+    def _get_rtmw_pose33_2d_pixels(self):
+        if self.last_keypoints_2d is None or self.last_scores is None:
+            return None
+
+        selected_2d = np.asarray(self.last_keypoints_2d[0])
+        if selected_2d.ndim != 2 or selected_2d.shape[1] < 2:
+            return None
+
+        selected_scores = np.asarray(self.last_scores[0]).reshape(-1)
+        source_xyz = np.concatenate(
+            [
+                selected_2d[:, :2].astype(np.float32),
+                np.zeros((selected_2d.shape[0], 1), dtype=np.float32),
+            ],
+            axis=1,
+        )
+        return convert_indexed_keypoints_to_pose33(
+            source_xyz,
+            selected_scores,
+            RTMW_TO_MEDIAPIPE,
+        )
 
     def draw_landmarks(self, image):
         """
@@ -422,30 +566,28 @@ class PoseDetector:
         Returns:
             numpy.ndarray: 繪製後的影像
         """
-        if self.backend_mode == 'RTMW3D':
+        if self.backend_mode in ('RTMW2D', 'RTMW3D'):
             if self.last_keypoints_2d is None or self.last_scores is None:
                 return image
 
-            image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            drawn_bgr = self.draw_skeleton(
-                image_bgr,
-                self.last_keypoints_2d,
-                self.last_scores,
+            # 只畫 RULA 實際分析/使用的點，而非 rtmlib 的全身 133 點，
+            # 讓畫面與異常判定範圍一致。
+            annotated = image.copy()
+            kpts_px = np.asarray(self.last_keypoints_2d[0])
+            scores  = np.asarray(self.last_scores[0]).reshape(-1)
+            return draw_rula_skeleton(
+                annotated, kpts_px, scores,
                 kpt_thr=RTMW3D_CONFIG.get('kpt_threshold', 0.3),
             )
-            return cv2.cvtColor(drawn_bgr, cv2.COLOR_BGR2RGB)
 
         if self.results is None or self.results.pose_landmarks is None:
             return image
 
-        annotated_image = image.copy()
-        self.mp_drawing.draw_landmarks(
-            annotated_image,
-            self.results.pose_landmarks,
-            self.mp_pose.POSE_CONNECTIONS,
-            landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style(),
-        )
-        return annotated_image
+        lms_2d = [
+            [lm.x, lm.y, lm.visibility]
+            for lm in self.results.pose_landmarks.landmark
+        ]
+        return draw_rula_skeleton_mp(image.copy(), lms_2d)
 
     def close(self):
         """釋放資源。"""

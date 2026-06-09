@@ -133,8 +133,8 @@ def main():
     )
     parser.add_argument(
         '-p', '--pose-backend',
-        type=str, choices=['MEDIAPIPE', 'RTMW3D'],
-        default=('RTMW3D' if config.POSE_BACKEND == 'RTMW3D' else 'MEDIAPIPE'),
+        type=str, choices=['MEDIAPIPE', 'RTMW2D', 'RTMW3D'],
+        default=(config.POSE_BACKEND if config.POSE_BACKEND in ('RTMW2D', 'RTMW3D') else 'MEDIAPIPE'),
         help='即時模式姿勢辨識後端'
     )
     parser.add_argument(

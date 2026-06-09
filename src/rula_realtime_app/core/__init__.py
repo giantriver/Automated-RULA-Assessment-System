@@ -10,6 +10,7 @@ from .config import (
     RTMW3D_CONFIG,
     RULA_CONFIG, 
     POSE_BACKEND,
+    ANALYSIS_MODE,
     WEBCAM_INDEX,
     RTMW_TO_MEDIAPIPE,
     convert_indexed_keypoints_to_pose33,
@@ -25,6 +26,7 @@ __all__ = [
     'RTMW3D_CONFIG',
     'RULA_CONFIG',
     'POSE_BACKEND',
+    'ANALYSIS_MODE',
     'WEBCAM_INDEX',
     'RTMW_TO_MEDIAPIPE',
     'convert_indexed_keypoints_to_pose33'

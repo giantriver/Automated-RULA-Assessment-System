@@ -11,8 +11,6 @@
 import os
 import cv2
 import numpy as np
-import mediapipe as mp
-from mediapipe.framework.formats import landmark_pb2
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -29,7 +27,8 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QFont
 
 from ..core.video_file_processor import export_csv
-from ..core.config import RTMW_TO_MEDIAPIPE
+from ..core.config import RTMW_TO_MEDIAPIPE, BONE_NAME_TO_RTMW_PAIR, BONE_NAME_TO_MP_PAIR, MP_RULA_KEYPOINTS
+from ..core.pose_detector import draw_rula_skeleton, draw_rula_skeleton_mp
 from .styles import (
     UPLOAD_BG_STYLE, CONTENT_CARD_STYLE, HEADER_CARD_STYLE,
     BACK_BTN_STYLE, EMERALD_BTN_STYLE,
@@ -71,122 +70,120 @@ def _setup_matplotlib_cjk_font() -> None:
 _setup_matplotlib_cjk_font()
 
 
-# BlazePose 33-keypoint connections (MediaPipe index pairs + color)
-_SKELETON_CONNECTIONS = [
-    # head
-    (0, 1, 'cyan'), (1, 2, 'cyan'), (2, 3, 'cyan'), (3, 7, 'cyan'),
-    (0, 4, 'cyan'), (4, 5, 'cyan'), (5, 6, 'cyan'), (6, 8, 'cyan'),
-    (9, 10, 'cyan'),
-    # torso
-    (11, 12, 'yellow'), (11, 23, 'yellow'), (12, 24, 'yellow'), (23, 24, 'yellow'),
-    # left arm
-    (11, 13, '#4dabf7'), (13, 15, '#4dabf7'), (15, 17, '#4dabf7'),
-    (15, 19, '#4dabf7'), (15, 21, '#4dabf7'), (17, 19, '#4dabf7'),
-    # right arm
-    (12, 14, '#ff6b6b'), (14, 16, '#ff6b6b'), (16, 18, '#ff6b6b'),
-    (16, 20, '#ff6b6b'), (16, 22, '#ff6b6b'), (18, 20, '#ff6b6b'),
-    # left leg
-    (23, 25, '#4dabf7'), (25, 27, '#4dabf7'), (27, 29, '#4dabf7'),
-    (27, 31, '#4dabf7'), (29, 31, '#4dabf7'),
-    # right leg
-    (24, 26, '#ff6b6b'), (26, 28, '#ff6b6b'), (28, 30, '#ff6b6b'),
-    (28, 32, '#ff6b6b'), (30, 32, '#ff6b6b'),
-]
-
-# RTMW / COCO-WholeBody body-only connections (indices 0-16 = COCO-17)
-# COCO-17: 0=nose,1=l_eye,2=r_eye,3=l_ear,4=r_ear,5=l_sho,6=r_sho,
-#          7=l_elb,8=r_elb,9=l_wri,10=r_wri,11=l_hip,12=r_hip,
-#          13=l_kne,14=r_kne,15=l_ank,16=r_ank
-_RTMW_BODY_CONNECTIONS = [
-    # head
-    (0, 1, 'cyan'), (0, 2, 'cyan'), (1, 3, 'cyan'), (2, 4, 'cyan'),
-    # torso
-    (5, 6, 'yellow'), (5, 11, 'yellow'), (6, 12, 'yellow'), (11, 12, 'yellow'),
-    # left arm
-    (5, 7, '#4dabf7'), (7, 9, '#4dabf7'),
-    # right arm
-    (6, 8, '#ff6b6b'), (8, 10, '#ff6b6b'),
-    # left leg
-    (11, 13, '#4dabf7'), (13, 15, '#4dabf7'),
-    # right leg
-    (12, 14, '#ff6b6b'), (14, 16, '#ff6b6b'),
+# ── RULA-only 3D skeleton connections (MediaPipe 33-pt indices) ──────────────
+# 3D 分析模式僅使用 MediaPipe，故只保留 MediaPipe 的 RULA 連線定義。
+# 僅含參與 RULA 角度計算的關節。
+_MP_RULA_3D_CONNECTIONS = [
+    ( 7,  8, '#0891b2'),  # 雙耳
+    (11, 12, '#b45309'), (11, 23, '#b45309'), (12, 24, '#b45309'), (23, 24, '#b45309'),
+    (11, 13, '#16a34a'), (13, 15, '#16a34a'),  # 左臂
+    (12, 14, '#16a34a'), (14, 16, '#16a34a'),  # 右臂
+    (15, 17, '#16a34a'), (15, 19, '#16a34a'),  # 左手
+    (16, 18, '#16a34a'), (16, 20, '#16a34a'),  # 右手
+    (11,  7, '#0891b2'), (12,  8, '#0891b2'),  # 肩→耳
 ]
 
 
 def _render_3d_skeleton_pixmap(landmarks_3d: list,
                                width: int = 340,
                                height: int = 380,
-                               native: dict = None) -> 'QPixmap | None':
-    """
-    Render a 3D skeleton into a QPixmap.
-
-    For RTMW3D, uses ``native['keypoints_3d_raw']`` (all model joints + scores
-    from ``native['scores']``) with COCO-17 body connections.
-    Falls back to ``landmarks_3d`` (33-point MediaPipe format) otherwise.
-    Returns None when no usable data is present.
-    """
+                               native: dict = None,
+                               rec: dict = None) -> 'QPixmap | None':
+    """Render RULA-only 3D skeleton with anomaly markers into a QPixmap."""
     from io import BytesIO
 
-    # ── Choose data source ────────────────────────────────────────────────────
-    # For RTMW3D use the full raw 3D keypoints (all K model joints) so the
-    # skeleton shows the whole body, not just the 15 RULA-mapped points.
-    raw_3d = (native or {}).get('keypoints_3d_raw') or []
-    raw_scores = (native or {}).get('scores') or []
+    if str((native or {}).get('analysis_mode', '')).upper() == '2D':
+        return None
 
-    if raw_3d and len(raw_3d) >= 17:
-        # RTMW3D path — use raw model outputs
-        arr3 = np.asarray(raw_3d, dtype=np.float64)          # [K, 3]
-        sc   = np.asarray(raw_scores, dtype=np.float64)
-        if sc.shape[0] < arr3.shape[0]:
-            sc = np.pad(sc, (0, arr3.shape[0] - sc.shape[0]))
+    # 3D 分析模式僅使用 MediaPipe，故只處理 33 點 world landmarks。
+    if not landmarks_3d or len(landmarks_3d) < 33:
+        return None
+    arr = np.asarray(landmarks_3d, dtype=np.float64)
+    xs, ys, zs, vs = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+    connections  = _MP_RULA_3D_CONNECTIONS
+    rula_joints  = set(MP_RULA_KEYPOINTS)
 
-        xs, ys, zs, vs = arr3[:, 0], arr3[:, 1], arr3[:, 2], sc
-        connections = _RTMW_BODY_CONNECTIONS
-    else:
-        # MediaPipe fallback
-        if not landmarks_3d or len(landmarks_3d) < 33:
-            return None
-        arr = np.asarray(landmarks_3d, dtype=np.float64)
-        xs, ys, zs, vs = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
-        connections = _SKELETON_CONNECTIONS
+    def _tx(p3):
+        """world 座標 [x,y,z] → 繪圖座標 (px, py, pz) = (x, z, -y)。"""
+        return p3[0], p3[2], -p3[1]
 
-    # ── Normalise pixel-scale coordinates ────────────────────────────────────
-    # RTMW3D X/Y are in pixel space; Z uses a different (smaller) unit.
-    # Normalise so the plot is proportional regardless of backend.
-    _vis = vs > 0.3
-    if _vis.any() and max(np.ptp(xs[_vis]), np.ptp(ys[_vis])) > 5.0:
-        _xy_span = max(np.ptp(xs[_vis]), np.ptp(ys[_vis]))
-        _cx, _cy, _cz = xs[_vis].mean(), ys[_vis].mean(), zs[_vis].mean()
-        xs = (xs - _cx) / _xy_span
-        ys = (ys - _cy) / _xy_span
-        zs = (zs - _cz) / _xy_span
-        _z_rng  = np.ptp(zs[_vis])
-        _xy_rng = max(np.ptp(xs[_vis]), np.ptp(ys[_vis]))
-        if _z_rng < _xy_rng * 0.1 and _z_rng > 1e-6:
-            zs = zs * min(_xy_rng / _z_rng * 0.3, 10.0)
+    # ── Bone anomaly lookup ────────────────────────────────────────────────────
+    bone_anomaly_pairs: set = set()
+    if rec:
+        for bone_name in (rec.get('bone_anomaly') or {}):
+            pair = BONE_NAME_TO_MP_PAIR.get(bone_name)
+            if pair and len(pair) == 2:
+                bone_anomaly_pairs.add((pair[0], pair[1]))
+                bone_anomaly_pairs.add((pair[1], pair[0]))
 
     dpi = 100
     fig = plt.figure(figsize=(width / dpi, height / dpi), dpi=dpi, facecolor='white')
-    ax = fig.add_subplot(111, projection='3d', facecolor='white')
+    ax  = fig.add_subplot(111, projection='3d', facecolor='white')
     fig.subplots_adjust(left=0.0, right=0.82, top=0.99, bottom=0.08)
 
+    # ── Draw RULA bones ────────────────────────────────────────────────────────
     for i, j, color in connections:
-        if i < len(vs) and j < len(vs) and vs[i] > 0.3 and vs[j] > 0.3:
-            # darken cyan/yellow for white bg readability
-            c = {'cyan': '#0891b2', 'yellow': '#b45309'}.get(color, color)
-            ax.plot(
-                [xs[i], xs[j]], [zs[i], zs[j]], [-ys[i], -ys[j]],
-                color=c, linewidth=2.2, alpha=0.9,
-            )
+        if i >= len(vs) or j >= len(vs) or vs[i] <= 0.3 or vs[j] <= 0.3:
+            continue
+        c  = '#dc2626' if ((i, j) in bone_anomaly_pairs) else color
+        lw = 3.0      if c == '#dc2626'                  else 2.2
+        ax.plot([xs[i], xs[j]], [zs[i], zs[j]], [-ys[i], -ys[j]],
+                color=c, linewidth=lw, alpha=0.9)
 
+    # ── Draw RULA joints (confidence-coloured) ─────────────────────────────────
     cmap = plt.cm.plasma
     norm = plt.Normalize(0.0, 1.0)
-    for k in range(len(vs)):
-        if vs[k] > 0.3:
+    for k in rula_joints:
+        if k < len(vs) and vs[k] > 0.3:
             ax.scatter(xs[k], zs[k], -ys[k],
                        color=cmap(norm(vs[k])), s=18, zorder=5, depthshade=False,
                        edgecolors='#334155', linewidths=0.4)
 
+    # ── Anomaly markers ────────────────────────────────────────────────────────
+    if rec:
+        joint_anomaly = rec.get('joint_anomaly') or []
+        detail_list   = rec.get('joint_anomaly_detail') or []
+        interp        = rec.get('interpolation') or {}
+
+        for mp_idx in rula_joints:
+            if mp_idx >= len(xs):
+                continue
+            detail  = detail_list[mp_idx] if mp_idx < len(detail_list) else None
+            reliable = joint_anomaly[mp_idx] if mp_idx < len(joint_anomaly) else True
+
+            reasons: set = set()
+            if isinstance(detail, dict):
+                rl = detail.get('reasons') or []
+                reasons = set(rl) if rl else ({detail['reason']} if detail.get('reason') else set())
+
+            has_interp = str(mp_idx) in interp
+            if reliable and not reasons and not has_interp:
+                continue
+
+            px, py, pz = float(xs[mp_idx]), float(zs[mp_idx]), float(-ys[mp_idx])
+
+            if 'low_visibility' in reasons:
+                ax.scatter(px, py, pz, marker='x', c='#ff5000', s=150,
+                           linewidths=2.5, zorder=7, depthshade=False)
+            if 'bone_length_abnormal' in reasons:
+                ax.scatter(px, py, pz, marker='s', c='#bef264', s=90,
+                           zorder=7, depthshade=False, alpha=0.9)
+            if 'speed_candidate' in reasons or 'speed_jump' in reasons:
+                ax.scatter(px, py, pz, marker='^', c='#dc2626', s=90,
+                           zorder=7, depthshade=False, alpha=0.9)
+            if has_interp:
+                # 藍圈畫在「插值後」3D 座標；無 pos_3d 時退回原始位置
+                info = interp.get(str(mp_idx))
+                p3 = info.get('pos_3d') if isinstance(info, dict) else None
+                if p3 and len(p3) >= 3:
+                    bx, by, bz = _tx(p3)
+                else:
+                    bx, by, bz = px, py, pz
+                ax.scatter(bx, by, bz, marker='o', c='#2563eb', s=110,
+                           zorder=8, depthshade=False, alpha=0.85,
+                           edgecolors='white', linewidths=1.2)
+
+    # ── Colorbar ───────────────────────────────────────────────────────────────
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, pad=0.05, fraction=0.03, shrink=0.55)
@@ -196,36 +193,34 @@ def _render_3d_skeleton_pixmap(landmarks_3d: list,
     cbar.set_ticks([0.0, 0.5, 1.0])
     cbar.set_ticklabels(['Low', '0.5', 'High'])
 
+    # ── Axes styling ───────────────────────────────────────────────────────────
     for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
         axis.label.set_color('#334155')
         axis.set_tick_params(colors='#64748b', labelsize=5)
         axis.pane.fill = False
         axis.pane.set_edgecolor('#cbd5e1')
         axis._axinfo['grid']['color'] = '#e2e8f0'
-
     ax.set_xlabel('X', fontsize=6, color='#334155', labelpad=2)
     ax.set_ylabel('Z', fontsize=6, color='#334155', labelpad=2)
     ax.set_zlabel('Y', fontsize=6, color='#334155', labelpad=2)
 
-    # auto-fit axis limits from visible joints with a small margin
-    _vis_mask = vs > 0.3
-    if _vis_mask.any():
-        _pad = 0.15
-        x_min = xs[_vis_mask].min() - _pad
-        x_max = xs[_vis_mask].max() + _pad
-        y_min = zs[_vis_mask].min() - _pad
-        y_max = zs[_vis_mask].max() + _pad
-        z_min = -ys[_vis_mask].max() - _pad
-        z_max = -ys[_vis_mask].min() + _pad
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
-        ax.set_zlim(z_min, z_max)
-        ax.set_box_aspect([x_max - x_min, y_max - y_min, z_max - z_min])
+    # ── 固定對稱立方體：以所有可見 RULA 關節質心為中心，box_aspect=1:1:1 ────────
+    # 用 RULA 關節質心（而非臀部）作為中心，讓骨架自然填滿框內。
+    # _CUBE_HALF 單位：公尺；手臂舉高被裁切時調大到 0.75。
+    _CUBE_HALF = 0.65
+    # 繪圖座標：(x, y, z)_plot = (xs, zs, -ys)
+    px_plot, py_plot, pz_plot = xs, zs, -ys
+    rula_vis = [k for k in rula_joints if k < len(vs) and vs[k] > 0.3]
+    if rula_vis:
+        cx = float(np.mean(px_plot[rula_vis]))
+        cy = float(np.mean(py_plot[rula_vis]))
+        cz = float(np.mean(pz_plot[rula_vis]))
     else:
-        ax.set_xlim(-0.6, 0.6)
-        ax.set_ylim(-0.6, 0.6)
-        ax.set_zlim(-1.2, 0.4)
-        ax.set_box_aspect([1.2, 1.2, 1.6])
+        cx = cy = cz = 0.0
+    ax.set_xlim(cx - _CUBE_HALF, cx + _CUBE_HALF)
+    ax.set_ylim(cy - _CUBE_HALF, cy + _CUBE_HALF)
+    ax.set_zlim(cz - _CUBE_HALF, cz + _CUBE_HALF)
+    ax.set_box_aspect([1, 1, 1])
     ax.view_init(elev=10, azim=-65)
 
     buf = BytesIO()
@@ -242,43 +237,19 @@ def _render_3d_skeleton_pixmap(landmarks_3d: list,
 def _draw_mediapipe_skeleton(frame_rgb: np.ndarray,
                              landmarks_2d: list,
                              min_visibility: float = 0.0) -> np.ndarray:
-    """Draw MediaPipe skeleton with MediaPipe's native drawer."""
-    if not landmarks_2d or len(landmarks_2d) < 33:
-        return frame_rgb
-
-    annotated = frame_rgb.copy()
-    lm_proto = landmark_pb2.NormalizedLandmarkList()
-    for lm in landmarks_2d:
-        if len(lm) < 3:
-            continue
-        lm_proto.landmark.add(
-            x=float(lm[0]),
-            y=float(lm[1]),
-            z=0.0,
-            visibility=float(lm[2]),
-            presence=float(lm[2]),
-        )
-
-    mp.solutions.drawing_utils.draw_landmarks(
-        annotated,
-        lm_proto,
-        mp.solutions.pose.POSE_CONNECTIONS,
-        landmark_drawing_spec=mp.solutions.drawing_styles.get_default_pose_landmarks_style(),
-    )
-    return annotated
+    """Draw MediaPipe RULA skeleton (only joints used in angle calculation)."""
+    return draw_rula_skeleton_mp(frame_rgb.copy(), landmarks_2d)
 
 
 def _draw_rtmw_skeleton(frame_rgb: np.ndarray,
                         keypoints_2d_norm: list,
                         scores: list,
                         kpt_threshold: float = 0.3) -> np.ndarray:
-    """Draw RTMW skeleton with rtmlib native drawer."""
+    """
+    只繪製 RULA 實際分析/使用的 RTMW 點與連線（與即時預覽共用 draw_rula_skeleton），
+    而非 rtmlib 的全身 133 點，使畫面與異常判定範圍一致。
+    """
     if not keypoints_2d_norm or not scores:
-        return frame_rgb
-
-    try:
-        from rtmlib import draw_skeleton
-    except Exception:
         return frame_rgb
 
     h, w = frame_rgb.shape[:2]
@@ -289,17 +260,55 @@ def _draw_rtmw_skeleton(frame_rgb: np.ndarray,
             continue
         kpts_px.append([float(pt[0]) * w, float(pt[1]) * h])
 
-    kpts_arr = np.asarray([kpts_px], dtype=np.float32)
-    scores_arr = np.asarray([scores], dtype=np.float32)
-
-    image_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-    drawn_bgr = draw_skeleton(
-        image_bgr,
-        kpts_arr,
-        scores_arr,
+    return draw_rula_skeleton(
+        frame_rgb,
+        np.asarray(kpts_px, dtype=np.float32),
+        np.asarray(scores, dtype=np.float32),
         kpt_thr=kpt_threshold,
     )
-    return cv2.cvtColor(drawn_bgr, cv2.COLOR_BGR2RGB)
+
+
+def _apply_interp_to_native(native: dict, interp: dict) -> dict:
+    """
+    回傳一份套用補點位置的 native 複本（不改動原始記錄）。
+
+    將每個補點關節的顯示座標覆蓋為插值後的 pos_norm，並把該點的可信度/分數
+    拉到 1.0，使骨架繪製器（以可見度 / score 為門檻）會畫出修復後的點。
+    """
+    if not interp or not isinstance(native, dict):
+        return native
+    backend = str(native.get('backend', '')).upper()
+    patched = dict(native)
+
+    if backend in ('RTMW2D', 'RTMW3D'):
+        pts = [list(p) for p in (native.get('keypoints_2d_norm') or [])]
+        sc  = list(native.get('scores') or [])
+        for j_str, info in interp.items():
+            pos = info.get('pos_norm') if isinstance(info, dict) else None
+            if not pos:
+                continue
+            rtmw_idx = RTMW_TO_MEDIAPIPE.get(int(j_str))
+            if rtmw_idx is None:
+                continue
+            if rtmw_idx < len(pts) and len(pts[rtmw_idx]) >= 2:
+                pts[rtmw_idx][0], pts[rtmw_idx][1] = pos[0], pos[1]
+            if rtmw_idx < len(sc):
+                sc[rtmw_idx] = 1.0
+        patched['keypoints_2d_norm'] = pts
+        patched['scores'] = sc
+    else:
+        lms = [list(p) for p in (native.get('landmarks_2d') or [])]
+        for j_str, info in interp.items():
+            pos = info.get('pos_norm') if isinstance(info, dict) else None
+            if not pos:
+                continue
+            j = int(j_str)
+            if j < len(lms) and len(lms[j]) >= 2:
+                lms[j][0], lms[j][1] = pos[0], pos[1]
+                if len(lms[j]) >= 3:
+                    lms[j][2] = 1.0
+        patched['landmarks_2d'] = lms
+    return patched
 
 
 def _frame_rgb_from_video(cap: cv2.VideoCapture,
@@ -336,6 +345,8 @@ class ResultWindow(QMainWindow):
         # playback state
         self._current_idx = 0
         self._show_skeleton = True
+        self._show_interp   = True
+        self._has_interp    = bool(results.get('use_interpolation'))
         self._play_timer    = QTimer()
         self._play_timer.setInterval(800)
         self._play_timer.timeout.connect(self._playback_tick)
@@ -467,6 +478,14 @@ class ResultWindow(QMainWindow):
         self._skel_cb.setStyleSheet('color: #0f172a; font-size: 13px;')
         self._skel_cb.toggled.connect(self._on_skeleton_toggle)
         skel_row.addWidget(self._skel_cb)
+
+        # 「顯示補點」只在有補點資料時出現；切換藍色圓圈顯示
+        self._interp_cb = QCheckBox()
+        self._interp_cb.setChecked(True)
+        self._interp_cb.setStyleSheet('color: #2563eb; font-size: 13px;')
+        self._interp_cb.toggled.connect(self._on_interp_toggle)
+        self._interp_cb.setVisible(self._has_interp)
+        skel_row.addWidget(self._interp_cb)
 
         self._no_video_lbl = QLabel()
         self._no_video_lbl.setStyleSheet('color: #94a3b8; font-size: 11px;')
@@ -626,6 +645,27 @@ class ResultWindow(QMainWindow):
             (anom_text,                            'result_stat_anom',     '#7c3aed', '#ede9fe'),
         ]
 
+        # 補點相關統計（僅在開啟補點時加入）
+        interp_summary = self._results.get('interpolation_summary') or {}
+        comparison     = self._results.get('rula_comparison') or {}
+        if self._results.get('use_interpolation'):
+            interp_total = interp_summary.get('total_interpolated', 0)
+            rate_pct = round(interp_summary.get('rate', 0.0) * 100, 1)
+            orig_avg   = comparison.get('original_avg')
+            interp_avg = comparison.get('interpolated_avg')
+            delta_avg  = comparison.get('delta_avg')
+            delta_text = ('—' if delta_avg is None
+                          else (f'+{delta_avg}' if delta_avg >= 0 else f'{delta_avg}'))
+            self._stat_items += [
+                (str(interp_total),                'result_stat_interp_count', '#1d4ed8', '#dbeafe'),
+                (f'{rate_pct}%',                   'result_stat_interp_rate',  '#1d4ed8', '#dbeafe'),
+                (f"{orig_avg if orig_avg is not None else '—'}",
+                                                   'result_stat_orig_avg',     '#92400e', '#fef3c7'),
+                (f"{interp_avg if interp_avg is not None else '—'}",
+                                                   'result_stat_interp_avg',   '#1d4ed8', '#dbeafe'),
+                (delta_text,                       'result_stat_interp_delta', '#7c3aed', '#ede9fe'),
+            ]
+
         self._stat_label_widgets = []  # keep refs to label QLabels for retranslation
         self._speed_anomaly_value_lbl = None
         stat_row = QHBoxLayout()
@@ -651,6 +691,14 @@ class ResultWindow(QMainWindow):
             self._stat_label_widgets.append(ll)
             if _key == 'result_stat_speed_anomaly':
                 self._speed_anomaly_value_lbl = vl
+            # 補點總數格：tooltip 顯示各關節明細（Interpolation Summary）
+            if _key == 'result_stat_interp_count':
+                per_joint = (self._results.get('interpolation_summary') or {}).get('per_joint') or {}
+                if per_joint:
+                    lines = [f'{name}: {cnt}' for name, cnt in per_joint.items()]
+                    tip = t('result_interp_summary_title') + '\n' + '\n'.join(lines)
+                    cell.setToolTip(tip)
+                    vl.setToolTip(tip)
 
         col.addLayout(stat_row)
         return card
@@ -696,14 +744,38 @@ class ResultWindow(QMainWindow):
         self._line_fig.patch.set_facecolor('#ffffff')
         self._line_ax.set_facecolor('#ffffff')
 
+        use_interp = bool(self._results.get('use_interpolation'))
+
         if xs and ys:
-            self._line_ax.plot(xs, ys, color='#2563eb', linewidth=1.8,
-                               marker='o', markersize=5, alpha=0.85, picker=6)
-            self._line_ax.fill_between(xs, ys, alpha=0.10, color='#2563eb')
             self._line_ax.axhspan(5, 8, alpha=0.06, color='#ef4444')
             self._line_ax.axhspan(3, 5, alpha=0.06, color='#f59e0b')
+
+            if use_interp:
+                # 原始 RULA（灰色虛線，畫在底層供對照）
+                ox = [r['timestamp'] for r in self._records
+                      if isinstance(r.get('original_best_score'), int)]
+                oy = [r['original_best_score'] for r in self._records
+                      if isinstance(r.get('original_best_score'), int)]
+                if ox and oy:
+                    self._line_ax.plot(ox, oy, color='#94a3b8', linewidth=1.4,
+                                       linestyle='--', marker='o', markersize=3,
+                                       alpha=0.8, label=t('result_chart_legend_orig'),
+                                       zorder=2)
+                interp_label = t('result_chart_legend_interp')
+            else:
+                interp_label = None
+
+            # primary（補點後 / 原始）藍色實線
+            self._line_ax.plot(xs, ys, color='#2563eb', linewidth=1.8,
+                               marker='o', markersize=5, alpha=0.85, picker=6,
+                               label=interp_label, zorder=3)
+            self._line_ax.fill_between(xs, ys, alpha=0.10, color='#2563eb', zorder=1)
             self._line_ax.set_ylim(0.5, 7.5)
             self._line_ax.set_yticks(range(1, 8))
+
+            if use_interp:
+                self._line_ax.legend(loc='upper right', fontsize=8, framealpha=0.85,
+                                     ncol=2, handlelength=1.6)
 
         self._vline = self._line_ax.axvline(x=0, color='#ef4444',
                                              linewidth=1.5, linestyle='--', alpha=0.7)
@@ -814,6 +886,7 @@ class ResultWindow(QMainWindow):
 
         self._frame_lbl.setText(t('result_no_video_text'))
         self._skel_cb.setText(t('result_skel_checkbox'))
+        self._interp_cb.setText(t('result_interp_checkbox'))
         self._ctrl_title_lbl.setText(t('result_ctrl_title'))
 
         self._prev_btn.setText(t('result_prev_btn'))
@@ -880,10 +953,11 @@ class ResultWindow(QMainWindow):
 
         if frame_rgb is not None:
             native = rec.get('native_draw_data')
+            interp = rec.get('interpolation') or {}
 
             if self._show_skeleton and isinstance(native, dict):
                 backend = str(native.get('backend', self._backend_mode)).upper()
-                if backend == 'RTMW3D':
+                if backend in ('RTMW2D', 'RTMW3D'):
                     keypoints_2d_norm = native.get('keypoints_2d_norm') or []
                     scores = native.get('scores') or []
                     if keypoints_2d_norm and scores:
@@ -898,44 +972,112 @@ class ResultWindow(QMainWindow):
                     if lms:
                         frame_rgb = _draw_mediapipe_skeleton(frame_rgb, lms)
 
-            # ── Joint anomaly overlay (MediaPipe / RTMW3D) ───────────────
+            # ── Bone anomaly overlay (紅色骨段線，疊在綠色骨架之上) ──────
             joint_anomaly = rec.get('joint_anomaly')
             joint_anomaly_detail = rec.get('joint_anomaly_detail') or []
             backend_name = str(native.get('backend', '')).upper() if isinstance(native, dict) else ''
-            if joint_anomaly and isinstance(native, dict) and backend_name in ('MEDIAPIPE', 'RTMW3D'):
+
+            bone_anomaly = rec.get('bone_anomaly') or {}
+            if bone_anomaly and isinstance(native, dict) and backend_name in ('MEDIAPIPE', 'RTMW2D', 'RTMW3D'):
                 h_fr, w_fr = frame_rgb.shape[:2]
-                if backend_name == 'RTMW3D':
+                if backend_name in ('RTMW2D', 'RTMW3D'):
+                    lms_bone = native.get('keypoints_2d_norm') or []
+                    bone_pair_map = BONE_NAME_TO_RTMW_PAIR
+                else:
+                    lms_bone = native.get('landmarks_2d') or []
+                    bone_pair_map = BONE_NAME_TO_MP_PAIR
+                for bone_name in bone_anomaly:
+                    pair = bone_pair_map.get(bone_name)
+                    if not pair:
+                        continue
+                    a, b = pair
+                    if a >= len(lms_bone) or b >= len(lms_bone):
+                        continue
+                    if len(lms_bone[a]) < 2 or len(lms_bone[b]) < 2:
+                        continue
+                    px_a = (int(lms_bone[a][0] * w_fr), int(lms_bone[a][1] * h_fr))
+                    px_b = (int(lms_bone[b][0] * w_fr), int(lms_bone[b][1] * h_fr))
+                    cv2.line(frame_rgb, px_a, px_b, (255, 255, 255), 5)  # 白色描邊
+                    cv2.line(frame_rgb, px_a, px_b, (220,   0,   0), 3)  # 紅色骨段
+
+            # ── Joint anomaly overlay (X / □ / △ 標記) ──────────────────
+            # 遍歷 detail（含可靠但 speed_candidate 的關節），逐關節依 reasons 疊加形狀：
+            #   low_visibility       → 橘色 X（invalid）
+            #   bone_length_abnormal → 黃色 □（invalid，僅 3D；core bone 不會出現）
+            #   speed_candidate      → 紅色 △（非 invalid，純速度提示）
+            if isinstance(native, dict) and backend_name in ('MEDIAPIPE', 'RTMW2D', 'RTMW3D') \
+                    and (joint_anomaly or joint_anomaly_detail):
+                h_fr, w_fr = frame_rgb.shape[:2]
+                if backend_name in ('RTMW2D', 'RTMW3D'):
                     lms_2d = native.get('keypoints_2d_norm') or []
                     idx_mapper = RTMW_TO_MEDIAPIPE
                 else:
                     lms_2d = native.get('landmarks_2d') or []
                     idx_mapper = {i: i for i in range(len(lms_2d))}
 
-                for i, reliable in enumerate(joint_anomaly):
-                    if reliable:
+                n_joints = max(len(joint_anomaly or []), len(joint_anomaly_detail))
+                _mp_rula_set = set(MP_RULA_KEYPOINTS)
+                for i in range(n_joints):
+                    # MediaPipe：只標記有參與角度計算的關節
+                    if backend_name == 'MEDIAPIPE' and i not in _mp_rula_set:
+                        continue
+                    detail = joint_anomaly_detail[i] if i < len(joint_anomaly_detail) else None
+                    reliable = joint_anomaly[i] if (joint_anomaly and i < len(joint_anomaly)) else True
+
+                    # reasons 清單（優先）；向後相容僅有 reason 欄位的舊記錄
+                    reasons_set: set[str] = set()
+                    if isinstance(detail, dict):
+                        reasons_list = detail.get('reasons') or []
+                        if reasons_list:
+                            reasons_set = set(reasons_list)
+                        elif detail.get('reason'):
+                            reasons_set = {detail['reason']}
+
+                    # 沒有任何標記要畫就略過（可靠且無 reasons）
+                    if reliable and not reasons_set:
                         continue
 
                     src_idx = idx_mapper.get(i)
                     if src_idx is None or src_idx >= len(lms_2d) or len(lms_2d[src_idx]) < 2:
                         continue
-
                     cx = int(lms_2d[src_idx][0] * w_fr)
                     cy = int(lms_2d[src_idx][1] * h_fr)
-                    detail = joint_anomaly_detail[i] if i < len(joint_anomaly_detail) else None
-                    reason = detail.get('reason') if isinstance(detail, dict) else None
+
                     d = 10
-                    if reason == 'speed_jump':
-                        # 紅色三角形標記
-                        p1 = (cx, cy - d)
+                    if 'low_visibility' in reasons_set:
+                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255,255,255), 5)
+                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255,255,255), 5)
+                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80,  0), 3)
+                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80,  0), 3)
+                    if 'bone_length_abnormal' in reasons_set:
+                        cv2.rectangle(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255,255,255), 4)
+                        cv2.rectangle(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (220,200,  0), 2)
+                    # 三角形 = 速度提示（speed_candidate）；相容舊記錄的 speed_jump
+                    if 'speed_candidate' in reasons_set or 'speed_jump' in reasons_set:
+                        p1 = (cx,    cy - d)
                         p2 = (cx - d, cy + d)
                         p3 = (cx + d, cy + d)
-                        cv2.polylines(frame_rgb, [np.array([p1, p2, p3])], True, (255, 0, 0), 3)
-                    else:
-                        # 橘紅色 X 標記（外框白色增加對比）
-                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 255, 255), 5)
-                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 255, 255), 5)
-                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80, 0),   3)
-                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80, 0),   3)
+                        cv2.polylines(frame_rgb, [np.array([p1, p2, p3])], True, (255,255,255), 4)
+                        cv2.polylines(frame_rgb, [np.array([p1, p2, p3])], True, (220,  0,  0), 2)
+                    # 不可靠但 reasons 為空（舊格式無 reasons 欄位）fallback 橘色 X
+                    if not reasons_set and not reliable:
+                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255,255,255), 5)
+                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255,255,255), 5)
+                        cv2.line(frame_rgb, (cx-d, cy-d), (cx+d, cy+d), (255, 80,  0), 3)
+                        cv2.line(frame_rgb, (cx+d, cy-d), (cx-d, cy+d), (255, 80,  0), 3)
+
+            # ── Interpolated joints (藍色圓圈) ──────────────────────────
+            if self._show_interp and interp:
+                h_fr, w_fr = frame_rgb.shape[:2]
+                for info in interp.values():
+                    pos = info.get('pos_norm') if isinstance(info, dict) else None
+                    if not pos or len(pos) < 2:
+                        continue
+                    cx = int(pos[0] * w_fr)
+                    cy = int(pos[1] * h_fr)
+                    cv2.circle(frame_rgb, (cx, cy), 9, (255, 255, 255), 3)  # 白色描邊
+                    cv2.circle(frame_rgb, (cx, cy), 9, ( 40, 120, 255), 2)  # 藍色圓圈
+
             score = rec.get('best_score')
             txt   = f"RULA: {score if score is not None else 'NULL'}"
             cv2.putText(frame_rgb, txt, (10, 32),
@@ -1013,6 +1155,7 @@ class ResultWindow(QMainWindow):
             frame_label=frame_label,
             render_3d_fn=_render_3d_skeleton_pixmap,
             parent=self,
+            group_thresholds=self._results.get('joint_group_thresholds'),
         )
         dlg.exec()
 
@@ -1049,6 +1192,10 @@ class ResultWindow(QMainWindow):
 
     def _on_skeleton_toggle(self, checked: bool):
         self._show_skeleton = checked
+        self._show_frame(self._current_idx)
+
+    def _on_interp_toggle(self, checked: bool):
+        self._show_interp = checked
         self._show_frame(self._current_idx)
 
     # ── Chart click → jump to frame ───────────────────────────────────────────

@@ -22,12 +22,14 @@ from .language import language_manager, t
 class RULAConfigDialog(QDialog):
     """Configuration dialog for RULA parameters with dropdown controls"""
     
-    def __init__(self, parent=None, current_backend_mode='MEDIAPIPE'):
+    def __init__(self, parent=None, current_backend_mode='MEDIAPIPE', current_analysis_mode='2D'):
         super().__init__(parent)
         self.lang = language_manager
         self.lang.add_observer(self.on_language_changed)
-        self.backend_modes = ['MEDIAPIPE', 'RTMW3D']
+        self.backend_modes = ['MEDIAPIPE', 'RTMW2D']
         self.selected_backend_mode = current_backend_mode if current_backend_mode in self.backend_modes else 'MEDIAPIPE'
+        self.analysis_modes = ['2D', '3D']
+        self.selected_analysis_mode = current_analysis_mode if current_analysis_mode in self.analysis_modes else '2D'
         
         self.setWindowTitle(t('config_title'))
         self.setMinimumSize(420, 360)
@@ -122,7 +124,7 @@ class RULAConfigDialog(QDialog):
 
         self.backend_combo = QComboBox()
         self.backend_combo.addItem(t('config_option_backend_mediapipe'), 'MEDIAPIPE')
-        self.backend_combo.addItem(t('config_option_backend_rtmw3d'), 'RTMW3D')
+        self.backend_combo.addItem(t('config_option_backend_rtmw2d'), 'RTMW2D')
 
         backend_index = self.backend_combo.findData(self.selected_backend_mode)
         if backend_index >= 0:
@@ -136,6 +138,28 @@ class RULAConfigDialog(QDialog):
         self.backend_desc_label.setStyleSheet("font-size: 11px; color: #95a5a6; margin-bottom: 8px;")
         self.backend_desc_label.setWordWrap(True)
         content_layout.addWidget(self.backend_desc_label)
+
+        mode_layout = QHBoxLayout()
+        self.analysis_mode_label = QLabel(t('config_analysis_mode'))
+        self.analysis_mode_label.setStyleSheet("font-weight: bold; color: #ecf0f1;")
+
+        self.analysis_mode_combo = QComboBox()
+        self.analysis_mode_combo.addItem(t('config_option_analysis_2d'), '2D')
+        self.analysis_mode_combo.addItem(t('config_option_analysis_3d'), '3D')
+        mode_index = self.analysis_mode_combo.findData(self.selected_analysis_mode)
+        if mode_index >= 0:
+            self.analysis_mode_combo.setCurrentIndex(mode_index)
+        self.analysis_mode_combo.currentIndexChanged.connect(self._sync_backend_for_analysis_mode)
+
+        mode_layout.addWidget(self.analysis_mode_label)
+        mode_layout.addWidget(self.analysis_mode_combo)
+        content_layout.addLayout(mode_layout)
+
+        self.analysis_mode_desc_label = QLabel(t('config_analysis_mode_desc'))
+        self.analysis_mode_desc_label.setStyleSheet("font-size: 11px; color: #95a5a6; margin-bottom: 8px;")
+        self.analysis_mode_desc_label.setWordWrap(True)
+        content_layout.addWidget(self.analysis_mode_desc_label)
+        self._sync_backend_for_analysis_mode()
 
         # 參數網格
         grid_layout = QGridLayout()
@@ -230,6 +254,8 @@ class RULAConfigDialog(QDialog):
         self.language_label.setText(t('config_language'))
         self.backend_label.setText(t('config_pose_backend'))
         self.backend_desc_label.setText(t('config_pose_backend_desc'))
+        self.analysis_mode_label.setText(t('config_analysis_mode'))
+        self.analysis_mode_desc_label.setText(t('config_analysis_mode_desc'))
         self.save_button.setText(t('config_save'))
         self.close_button.setText(t('config_cancel'))
 
@@ -246,10 +272,19 @@ class RULAConfigDialog(QDialog):
         selected_backend = self.backend_combo.currentData()
         self.backend_combo.clear()
         self.backend_combo.addItem(t('config_option_backend_mediapipe'), 'MEDIAPIPE')
-        self.backend_combo.addItem(t('config_option_backend_rtmw3d'), 'RTMW3D')
+        self.backend_combo.addItem(t('config_option_backend_rtmw2d'), 'RTMW2D')
         selected_backend_index = self.backend_combo.findData(selected_backend)
         if selected_backend_index >= 0:
             self.backend_combo.setCurrentIndex(selected_backend_index)
+
+        selected_mode = self.analysis_mode_combo.currentData()
+        self.analysis_mode_combo.clear()
+        self.analysis_mode_combo.addItem(t('config_option_analysis_2d'), '2D')
+        self.analysis_mode_combo.addItem(t('config_option_analysis_3d'), '3D')
+        selected_mode_index = self.analysis_mode_combo.findData(selected_mode)
+        if selected_mode_index >= 0:
+            self.analysis_mode_combo.setCurrentIndex(selected_mode_index)
+        self._sync_backend_for_analysis_mode()
 
         # 更新參數名稱標籤
         for param_key, (label, name_key) in self.param_name_labels.items():
@@ -289,14 +324,32 @@ class RULAConfigDialog(QDialog):
             self.lang.set_language(selected_lang)
 
         selected_backend = self.backend_combo.currentData()
+        selected_analysis_mode = self.analysis_mode_combo.currentData()
+        if selected_analysis_mode == '3D':
+            selected_backend = 'MEDIAPIPE'
         if selected_backend in self.backend_modes:
             self.selected_backend_mode = selected_backend
+        if selected_analysis_mode in self.analysis_modes:
+            self.selected_analysis_mode = selected_analysis_mode
 
         self.accept()
 
     def get_selected_backend_mode(self):
         """取得使用者選擇的姿勢偵測後端。"""
         return self.selected_backend_mode
+
+    def get_selected_analysis_mode(self):
+        return self.selected_analysis_mode
+
+    def _sync_backend_for_analysis_mode(self):
+        if not hasattr(self, 'analysis_mode_combo') or not hasattr(self, 'backend_combo'):
+            return
+        is_3d = self.analysis_mode_combo.currentData() == '3D'
+        if is_3d:
+            idx = self.backend_combo.findData('MEDIAPIPE')
+            if idx >= 0:
+                self.backend_combo.setCurrentIndex(idx)
+        self.backend_combo.setEnabled(not is_3d)
 
 
 class LanguageSelectionDialog(QDialog):
@@ -429,11 +482,14 @@ class FrameMetricsDialog(QDialog):
     RIGHT_MIN_W: int = 580  # 右側面板最小寬度
     SECTION_MIN_W: int = 240  # 每個 section card 最小寬度
 
-    def __init__(self, rec: dict, frame_label: str, render_3d_fn, parent=None):
+    def __init__(self, rec: dict, frame_label: str, render_3d_fn, parent=None,
+                 group_thresholds: dict | None = None):
         super().__init__(parent)
         self._rec = rec
         self._frame_label = frame_label
         self._render_3d_fn = render_3d_fn
+        # 速度門檻全片共用一份，由結果頂層帶入；舊版 JSON 則退回逐幀紀錄
+        self._group_thresholds = group_thresholds
 
         self.setWindowTitle(t('result_metrics_title'))
         self.setMinimumWidth(self.DLG_MIN_W)
@@ -483,7 +539,8 @@ class FrameMetricsDialog(QDialog):
         col.setContentsMargins(0, 4, 0, 0)
         col.setSpacing(2)
 
-        title = QLabel('3D Skeleton')
+        is_2d = str(self._native.get('analysis_mode', '')).upper() == '2D'
+        title = QLabel('2D Pixel Analysis' if is_2d else '3D Skeleton')
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet('color: #475569; font-size: 11px;')
         col.addWidget(title)
@@ -494,7 +551,7 @@ class FrameMetricsDialog(QDialog):
         col.addWidget(img_lbl)
 
         lm3d = self._native.get('landmarks_3d', [])
-        pixmap = self._render_3d_fn(lm3d, w, h, self._native)
+        pixmap = self._render_3d_fn(lm3d, w, h, self._native, self._rec)
         if pixmap is not None:
             img_lbl.setPixmap(
                 pixmap.scaled(w, h,
@@ -502,43 +559,58 @@ class FrameMetricsDialog(QDialog):
                               Qt.TransformationMode.SmoothTransformation)
             )
         else:
-            img_lbl.setText('No 3D data')
+            img_lbl.setText('No 3D skeleton in 2D mode' if is_2d else 'No 3D data')
             img_lbl.setStyleSheet('color: #94a3b8; font-size: 12px;')
 
         return panel
 
     def _build_right_panel(self) -> QWidget:
         rec = self._rec
+        has_interp = 'orig_left_upper_arm_angle' in rec
         widget = QWidget()
         widget.setMinimumWidth(self.RIGHT_MIN_W)
         col = QVBoxLayout(widget)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(6)
 
+        def _a(key): return self._fmt_angle(rec.get(key))
+        def _s(key): return self._fmt_score(rec.get(key))
+
         # angles row (left + right)
         angles_row = QHBoxLayout()
         angles_row.setSpacing(10)
+
+        left_angle_rows = [
+            (t('upper_arm'), _a('left_upper_arm_angle'),  'left',  'Upper Arm',
+             _a('orig_left_upper_arm_angle') if has_interp else None),
+            (t('lower_arm'), _a('left_lower_arm_angle'),  'left',  'Lower Arm',
+             _a('orig_left_lower_arm_angle') if has_interp else None),
+            (t('wrist'),     _a('left_wrist_angle'),      'left',  'Wrist',
+             _a('orig_left_wrist_angle') if has_interp else None),
+            (t('neck'),      _a('left_neck_angle'),       'left',  'Neck',
+             _a('orig_left_neck_angle') if has_interp else None),
+            (t('trunk'),     _a('left_trunk_angle'),      'left',  'Trunk',
+             _a('orig_left_trunk_angle') if has_interp else None),
+        ]
+        right_angle_rows = [
+            (t('upper_arm'), _a('right_upper_arm_angle'), 'right', 'Upper Arm',
+             _a('orig_right_upper_arm_angle') if has_interp else None),
+            (t('lower_arm'), _a('right_lower_arm_angle'), 'right', 'Lower Arm',
+             _a('orig_right_lower_arm_angle') if has_interp else None),
+            (t('wrist'),     _a('right_wrist_angle'),     'right', 'Wrist',
+             _a('orig_right_wrist_angle') if has_interp else None),
+            (t('neck'),      _a('right_neck_angle'),      'right', 'Neck',
+             _a('orig_right_neck_angle') if has_interp else None),
+            (t('trunk'),     _a('right_trunk_angle'),     'right', 'Trunk',
+             _a('orig_right_trunk_angle') if has_interp else None),
+        ]
         angles_row.addWidget(self._make_section(
-            t('result_metrics_left_angles'),
-            [
-                (t('upper_arm'), self._fmt_angle(rec.get('left_upper_arm_angle')),  'left',  'Upper Arm'),
-                (t('lower_arm'), self._fmt_angle(rec.get('left_lower_arm_angle')),  'left',  'Lower Arm'),
-                (t('wrist'),     self._fmt_angle(rec.get('left_wrist_angle')),      'left',  'Wrist'),
-                (t('neck'),      self._fmt_angle(rec.get('left_neck_angle')),       'left',  'Neck'),
-                (t('trunk'),     self._fmt_angle(rec.get('left_trunk_angle')),      'left',  'Trunk'),
-            ],
-            '#f0f9ff',
+            t('result_metrics_left_angles'), left_angle_rows, '#f0f9ff',
+            show_interp=has_interp,
         ))
         angles_row.addWidget(self._make_section(
-            t('result_metrics_right_angles'),
-            [
-                (t('upper_arm'), self._fmt_angle(rec.get('right_upper_arm_angle')), 'right', 'Upper Arm'),
-                (t('lower_arm'), self._fmt_angle(rec.get('right_lower_arm_angle')), 'right', 'Lower Arm'),
-                (t('wrist'),     self._fmt_angle(rec.get('right_wrist_angle')),     'right', 'Wrist'),
-                (t('neck'),      self._fmt_angle(rec.get('right_neck_angle')),      'right', 'Neck'),
-                (t('trunk'),     self._fmt_angle(rec.get('right_trunk_angle')),     'right', 'Trunk'),
-            ],
-            '#f0fdf4',
+            t('result_metrics_right_angles'), right_angle_rows, '#f0fdf4',
+            show_interp=has_interp,
         ))
         col.addLayout(angles_row, 3)
 
@@ -546,32 +618,42 @@ class FrameMetricsDialog(QDialog):
         scores_row = QHBoxLayout()
         scores_row.setSpacing(10)
         final_key = t('final_score')
+        left_score_rows = [
+            ('Table A', _s('left_posture_score_a'), None, None,
+             _s('orig_left_posture_score_a') if has_interp else None),
+            ('Table B', _s('left_posture_score_b'), None, None,
+             _s('orig_left_posture_score_b') if has_interp else None),
+            (final_key, _s('left_score'), None, None,
+             _s('orig_left_score') if has_interp else None),
+        ]
+        right_score_rows = [
+            ('Table A', _s('right_posture_score_a'), None, None,
+             _s('orig_right_posture_score_a') if has_interp else None),
+            ('Table B', _s('right_posture_score_b'), None, None,
+             _s('orig_right_posture_score_b') if has_interp else None),
+            (final_key, _s('right_score'), None, None,
+             _s('orig_right_score') if has_interp else None),
+        ]
         scores_row.addWidget(self._make_section(
-            t('result_metrics_left_scores'),
-            [
-                ('Table A',  self._fmt_score(rec.get('left_posture_score_a'))),
-                ('Table B',  self._fmt_score(rec.get('left_posture_score_b'))),
-                (final_key,  self._fmt_score(rec.get('left_score'))),
-            ],
-            '#eff6ff',
+            t('result_metrics_left_scores'), left_score_rows, '#eff6ff',
+            show_interp=has_interp,
         ))
         scores_row.addWidget(self._make_section(
-            t('result_metrics_right_scores'),
-            [
-                ('Table A',  self._fmt_score(rec.get('right_posture_score_a'))),
-                ('Table B',  self._fmt_score(rec.get('right_posture_score_b'))),
-                (final_key,  self._fmt_score(rec.get('right_score'))),
-            ],
-            '#fefce8',
+            t('result_metrics_right_scores'), right_score_rows, '#fefce8',
+            show_interp=has_interp,
         ))
         col.addLayout(scores_row, 2)
 
         return widget
 
-    def _make_section(self, title: str, rows: list, bg: str = '#f1f5f9') -> QFrame:
+    def _make_section(self, title: str, rows: list, bg: str = '#f1f5f9',
+                      show_interp: bool = False) -> QFrame:
         """
         Build a labelled card.
         rows: list of (label, value) or (label, value, side, part_name)
+              or (label, value, side, part_name, orig_value) when show_interp=True.
+        When show_interp=True and orig_value is provided, display as
+        "orig_value → value" (補點前 → 補點後); unchanged values show a single value.
         """
         frame = QFrame()
         frame.setStyleSheet(
@@ -591,10 +673,22 @@ class FrameMetricsDialog(QDialog):
         title_lbl.setStyleSheet('color: #0f172a;')
         col.addWidget(title_lbl)
 
+        # 補點模式 header：「補點前  →  補點後」
+        if show_interp:
+            hdr = QHBoxLayout()
+            hdr.addStretch()
+            for txt in (t('frame_metrics_before_interp'), '→', t('frame_metrics_after_interp')):
+                h = QLabel(txt)
+                h.setStyleSheet('color: #94a3b8; font-size: 10px;')
+                h.setAlignment(Qt.AlignmentFlag.AlignRight)
+                hdr.addWidget(h)
+            col.addLayout(hdr)
+
         for row_item in rows:
             label, value = row_item[0], row_item[1]
             click_side = row_item[2] if len(row_item) > 2 else None
             click_part = row_item[3] if len(row_item) > 3 else None
+            orig_value = row_item[4] if (show_interp and len(row_item) > 4) else None
             is_null = (value == 'NULL')
             r = QHBoxLayout()
 
@@ -616,15 +710,41 @@ class FrameMetricsDialog(QDialog):
                 lbl = QLabel(label)
                 lbl.setStyleSheet('color: #475569; font-size: 12px;')
 
-            val_lbl = QLabel(value)
-            val_lbl.setStyleSheet(
-                f'color: {"#ef4444" if is_null else "#0f172a"};'
-                'font-size: 12px; font-family: Consolas, monospace;'
-            )
-            val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             r.addWidget(lbl)
             r.addStretch()
-            r.addWidget(val_lbl)
+
+            if show_interp and orig_value is not None:
+                # 補點前值
+                orig_null = (orig_value == 'NULL')
+                orig_lbl = QLabel(orig_value)
+                orig_lbl.setStyleSheet(
+                    f'color: {"#ef4444" if orig_null else "#64748b"};'
+                    'font-size: 12px; font-family: Consolas, monospace;'
+                )
+                orig_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+                arrow_lbl = QLabel('→')
+                arrow_lbl.setStyleSheet('color: #94a3b8; font-size: 11px; padding: 0 3px;')
+                # 補點後值（primary）—— 有改變時用藍色，NULL 用紅色
+                changed = (orig_value != value)
+                val_color = '#ef4444' if is_null else ('#2563eb' if changed else '#0f172a')
+                val_lbl = QLabel(value)
+                val_lbl.setStyleSheet(
+                    f'color: {val_color};'
+                    'font-size: 12px; font-family: Consolas, monospace;'
+                )
+                val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+                r.addWidget(orig_lbl)
+                r.addWidget(arrow_lbl)
+                r.addWidget(val_lbl)
+            else:
+                val_lbl = QLabel(value)
+                val_lbl.setStyleSheet(
+                    f'color: {"#ef4444" if is_null else "#0f172a"};'
+                    'font-size: 12px; font-family: Consolas, monospace;'
+                )
+                val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+                r.addWidget(val_lbl)
+
             col.addLayout(r)
 
         col.addStretch()
@@ -633,7 +753,7 @@ class FrameMetricsDialog(QDialog):
     def _show_joint_popup(self, side: str, part_name: str):
         joints = _JOINT_GROUPS.get((side, part_name), [])
         joint_anomaly_detail = self._rec.get('joint_anomaly_detail') or []
-        group_thresholds = self._rec.get('joint_group_thresholds') or {}
+        group_thresholds = self._group_thresholds or self._rec.get('joint_group_thresholds') or {}
 
         popup = QDialog(self)
         popup.setWindowTitle(f'{part_name} — {t("joint_confidence_title")}')
@@ -688,7 +808,8 @@ class FrameMetricsDialog(QDialog):
             conf = self._get_conf(idx)
             det = joint_anomaly_detail[idx] if idx < len(joint_anomaly_detail) else None
             sr = det.get('speed_ratio') if isinstance(det, dict) else None
-            is_anomaly = bool(det and det.get('reason'))
+            det_reasons = det.get('reasons') if isinstance(det, dict) else None
+            is_anomaly = bool(det_reasons) or bool(det and det.get('reason'))
 
             # Sort by anomaly -> confidence -> speed ratio -> index
             anomaly_order = 0 if is_anomaly else 1
@@ -709,16 +830,32 @@ class FrameMetricsDialog(QDialog):
                 conf_color = '#4ade80' if passes else '#f87171'
 
             # ── Anomaly reason ──────────────────────────────────────────
-            if not isinstance(det, dict) or not det.get('reason'):
+            reasons = det.get('reasons') if isinstance(det, dict) else None
+            if not reasons and isinstance(det, dict) and det.get('reason'):
+                reasons = [det.get('reason')]  # 向後相容舊記錄（僅有單一 reason）
+            if not reasons:
                 reason_text  = t('joint_confidence_none')
                 reason_color = '#4ade80'
             else:
                 reason_map = {
-                    'low_visibility':    t('joint_confidence_reason_low_vis'),
-                    'speed_jump':        t('joint_confidence_reason_speed_jump'),
+                    'low_visibility':       t('joint_confidence_reason_low_vis'),
+                    'speed_jump':           t('joint_confidence_reason_speed_jump'),
+                    'speed_candidate':      t('joint_confidence_reason_speed_candidate'),
+                    'bone_length_abnormal': t('joint_confidence_reason_bone_length_abnormal'),
                 }
-                reason_text  = reason_map.get(det.get('reason', ''), det.get('reason', '?'))
-                reason_color = '#fb923c'
+                # 顏色與影像疊加標記一致：
+                #   low_visibility       → 橘 (對應橘色 X，invalid)
+                #   bone_length_abnormal → 黃綠 (對應黃色 □ / 骨段紅線，invalid，僅 3D)
+                #   speed_candidate      → 紅 (對應紅色 △，純提示不 invalid；含舊記錄 speed_jump)
+                if 'bone_length_abnormal' in reasons:
+                    reason_color = '#bef264'        # 黃綠
+                elif 'low_visibility' in reasons:
+                    reason_color = '#fb923c'        # 橘
+                elif 'speed_candidate' in reasons or 'speed_jump' in reasons:
+                    reason_color = '#f87171'        # 紅（速度提示）
+                else:
+                    reason_color = '#facc15'        # 淺黃（其他）
+                reason_text = ', '.join(reason_map.get(r, r) for r in reasons)
 
             # ── Speed ratio ─────────────────────────────────────────────
             speed_checked = bool(det and det.get('speed_checked'))
@@ -779,7 +916,7 @@ class FrameMetricsDialog(QDialog):
             lms = native.get('landmarks_2d', [])
             if idx < len(lms) and len(lms[idx]) >= 3:
                 return float(lms[idx][2])
-        if backend == 'RTMW3D':
+        if backend in ('RTMW2D', 'RTMW3D'):
             rtmw_idx = RTMW_TO_MEDIAPIPE.get(idx)
             if rtmw_idx is not None:
                 scores_list = native.get('scores', [])

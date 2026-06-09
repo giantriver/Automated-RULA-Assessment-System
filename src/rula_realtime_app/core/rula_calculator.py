@@ -50,7 +50,8 @@ def rula_risk(point_score, wrist, trunk, upper_Shoulder, lower_Limb, neck,
                     rula['score'] = str(tcval)
     return rula, point_score
 # import pprint
-def rula_score_side(pose, side: str, previous_scores=None, joint_anomaly=None):
+def rula_score_side(pose, side: str, previous_scores=None, joint_anomaly=None,
+                    analysis_mode='3D'):
     """
     計算單側（Left/Right）RULA 分數
     joint_anomaly: list[bool] | None，由 _compute_anomaly_mask 產生；
@@ -58,6 +59,7 @@ def rula_score_side(pose, side: str, previous_scores=None, joint_anomaly=None):
     """
     point_score = {}
     angle_data = {}
+    mode = str(analysis_mode or '3D').upper()
     # print(f"[DEBUG] 使用中的 RULA_CONFIG ({side}):")
     # pprint.pprint(RULA_CONFIG)   # 清楚輸出 dict
     # MediaPipe Pose 索引
@@ -192,44 +194,51 @@ def rula_score_side(pose, side: str, previous_scores=None, joint_anomaly=None):
         # 步驟1：身體向上向量（髖→肩）
         v_u = SHO_C - HIP_C
 
-        # 步驟2：髖部左右軸（左髖→右髖）
-        R_HIP_pos = np.array([pose[R_HIP][0], pose[R_HIP][1], pose[R_HIP][2]])
-        L_HIP_pos = np.array([pose[L_HIP][0], pose[L_HIP][1], pose[L_HIP][2]])
-        v_hip_lr = R_HIP_pos - L_HIP_pos
-
-        # 步驟3：身體前方向量（冠狀面法向量）v_f = v_u × v_hip_lr
-        v_f = np.cross(v_u, v_hip_lr)
-
-        # 步驟4：矢狀面法向量 P_s（身體左右方向）P_s = v_u × v_f
-        P_s = np.cross(v_u, v_f)
-
-        # 步驟5：頸部向量（肩→頭）
+        # 2D/3D branch: both start from the shoulder-to-head neck vector.
         v_neck = HEAD_C - SHO_C
 
-        # 步驟6：將頸部向量投影到矢狀面（去除左右分量）
-        P_s_norm = np.linalg.norm(P_s)
-        if P_s_norm > 1e-6:
-            P_s_hat = P_s / P_s_norm
-            v_neck_proj = v_neck - np.dot(v_neck, P_s_hat) * P_s_hat
-        else:
-            v_neck_proj = v_neck
-
-        # 步驟7：計算頸屈角度（投影頸向量與身體向上向量的夾角）
-        theta_neck = safe_angle(v_neck_proj, v_u)
-
-        # 步驟8：判斷前屈/後仰（投影頸向量是否朝身體前方）
-        v_f_norm = np.linalg.norm(v_f)
-        if v_f_norm > 1e-6:
-            v_f_hat = v_f / v_f_norm
-            neck_forward = np.dot(v_neck_proj, v_f_hat) >= 0
-        else:
-            neck_forward = True  # 預設前屈
-
-        # 根據前後方向決定角度符號
-        if not neck_forward:  # 後仰
-            signed_neck_angle = -theta_neck
-        else:  # 前屈或中性
+        if mode == '2D':
+            # 2D pixel mode: stay in the image plane. A single 2D frame has no
+            # reliable depth axis, so do not infer sagittal forward/backward sign.
+            theta_neck = safe_angle(v_neck, v_u)
             signed_neck_angle = theta_neck
+            neck_forward = True
+        else:
+            # 3D mode: use hip left-right axis to build the sagittal plane.
+            R_HIP_pos = np.array([pose[R_HIP][0], pose[R_HIP][1], pose[R_HIP][2]])
+            L_HIP_pos = np.array([pose[L_HIP][0], pose[L_HIP][1], pose[L_HIP][2]])
+            v_hip_lr = R_HIP_pos - L_HIP_pos
+
+            # Body forward vector, normal to the frontal plane.
+            v_f = np.cross(v_u, v_hip_lr)
+
+            # Sagittal plane normal, roughly the body left-right direction.
+            P_s = np.cross(v_u, v_f)
+
+            # Project neck vector onto the sagittal plane.
+            P_s_norm = np.linalg.norm(P_s)
+            if P_s_norm > 1e-6:
+                P_s_hat = P_s / P_s_norm
+                v_neck_proj = v_neck - np.dot(v_neck, P_s_hat) * P_s_hat
+            else:
+                v_neck_proj = v_neck
+
+            # Neck angle relative to body-up vector.
+            theta_neck = safe_angle(v_neck_proj, v_u)
+
+            # Determine forward flexion vs extension.
+            v_f_norm = np.linalg.norm(v_f)
+            if v_f_norm > 1e-6:
+                v_f_hat = v_f / v_f_norm
+                neck_forward = np.dot(v_neck_proj, v_f_hat) >= 0
+            else:
+                neck_forward = True
+
+            # Use a negative angle for extension.
+            if not neck_forward:
+                signed_neck_angle = -theta_neck
+            else:
+                signed_neck_angle = theta_neck
 
         angle_data['neck_angle'] = round(signed_neck_angle, 2)
 
@@ -318,7 +327,8 @@ def rula_score_side(pose, side: str, previous_scores=None, joint_anomaly=None):
 
     return rula
 
-def angle_calc(pose, previous_left=None, previous_right=None, joint_anomaly=None):
+def angle_calc(pose, previous_left=None, previous_right=None, joint_anomaly=None,
+               analysis_mode='3D'):
     """計算左右側 RULA 分數
 
     joint_anomaly: list[bool] | None，由 _compute_anomaly_mask 產生；
@@ -328,8 +338,8 @@ def angle_calc(pose, previous_left=None, previous_right=None, joint_anomaly=None
         if not pose or len(pose) < 33:
             return ({"score": "NULL"}, {"score": "NULL"})
 
-        rula_left  = rula_score_side(pose, 'Left',  previous_left,  joint_anomaly)
-        rula_right = rula_score_side(pose, 'Right', previous_right, joint_anomaly)
+        rula_left  = rula_score_side(pose, 'Left',  previous_left,  joint_anomaly, analysis_mode)
+        rula_right = rula_score_side(pose, 'Right', previous_right, joint_anomaly, analysis_mode)
 
         return (rula_left, rula_right)
     except Exception as e:

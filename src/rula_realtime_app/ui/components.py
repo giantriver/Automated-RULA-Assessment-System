@@ -233,7 +233,6 @@ class CoordinatesPanel(QGroupBox):
         """
         # 只顯示用於 RULA 計算的關鍵點
         key_points = {
-            0: "Nose",
             11: "Left Shoulder",
             12: "Right Shoulder",
             13: "Left Elbow",

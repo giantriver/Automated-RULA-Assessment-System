@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(.venv/Scripts/python -c \"import rtmlib; import os, inspect; p = os.path.dirname\\(inspect.getfile\\(rtmlib\\)\\); import glob; files = glob.glob\\(p+''/**/*.py'', recursive=True\\); [print\\(f\\) for f in files if ''wholebody'' in f.lower\\(\\) or ''body'' in f.lower\\(\\) or ''3d'' in f.lower\\(\\)]\")",
-      "Bash(.venv/Scripts/python -c \":*)"
+      "Bash(.venv/Scripts/python -c \":*)",
+      "PowerShell(python -m py_compile src/rula_realtime_app/core/video_file_processor.py)",
+      "PowerShell(if \\($?\\) { \"OK\" })",
+      "PowerShell(python -m py_compile src/rula_realtime_app/ui/history_window.py src/rula_realtime_app/ui/language.py)",
+      "PowerShell(python -m py_compile src/rula_realtime_app/ui/history_window.py)",
+      "Bash(python -c ' *)",
+      "Bash(python diag_speed_anomaly.py)",
+      "Bash(python diag_speed_anomaly2.py)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'd:\\\\projects\\\\RULA_RTMPose\\\\src\\\\rula_realtime_app\\\\core\\\\video_file_processor.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK video_file_processor'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'd:\\\\projects\\\\RULA_RTMPose\\\\src\\\\rula_realtime_app\\\\ui\\\\result_window.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/rula_realtime_app/ui/result_window.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/rula_realtime_app/ui/result_window.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast,sys; t=open\\('src/rula_realtime_app/ui/result_window.py',encoding='utf-8'\\).read\\(\\); ast.parse\\(t\\); print\\('OK, MP_RULA_KEYPOINTS imported:', 'MP_RULA_KEYPOINTS' in t and 'from ..core.config import' in t\\)\")"
     ]
   }
 }

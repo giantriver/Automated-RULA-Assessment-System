@@ -43,7 +43,8 @@ class RealtimeProcessorWorker(QObject):
     fps_updated = pyqtSignal(float)
 
     def __init__(self, pose_detector_or_mode, display_mode: str,
-                 rula_calc_every_n_frames: int, poll_interval_ms: int = 33):
+                 rula_calc_every_n_frames: int, poll_interval_ms: int = 33,
+                 analysis_mode: str = '2D'):
         """
         Args:
             pose_detector_or_mode: 已建立的 PoseDetector，或 backend_mode 字串
@@ -58,6 +59,7 @@ class RealtimeProcessorWorker(QObject):
             self._backend_mode = None
             self.pose_detector = pose_detector_or_mode
         self.display_mode = display_mode
+        self.analysis_mode = str(analysis_mode or '2D').upper()
         self.rula_calc_every_n_frames = rula_calc_every_n_frames
 
         # Thread-safe latest-frame buffer
@@ -146,14 +148,15 @@ class RealtimeProcessorWorker(QObject):
 
             if self.display_mode == "RULA":
                 if self._frame_counter % self.rula_calc_every_n_frames == 0:
-                    landmarks_arr = self.pose_detector.get_landmarks_array()
+                    landmarks_arr = self.pose_detector.get_rula_landmarks(self.analysis_mode)
                     rula_left, rula_right = angle_calc(
-                        landmarks_arr, self.prev_left, self.prev_right
+                        landmarks_arr, self.prev_left, self.prev_right,
+                        analysis_mode=self.analysis_mode,
                     )
                     self.prev_left = rula_left
                     self.prev_right = rula_right
             else:  # COORDINATES
-                landmarks = self.pose_detector.get_landmarks_array()
+                landmarks = self.pose_detector.get_rula_landmarks(self.analysis_mode)
         else:
             annotated = frame
 
